@@ -2,8 +2,6 @@
   <img src="assets/banner.jpg" alt="WhereDaFlock Banner" width="100%" style="border-radius: 8px;">
 </p>
 
-# WhereDaFlock 🛡️
-
 <p align="center">
   <strong>An Open-Source 2.4GHz RF Surveillance Countermeasure & Privacy-Preserving Navigation Ecosystem</strong>
 </p>
