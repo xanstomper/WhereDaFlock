@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.wheredaflock
   deploymentTarget:
     iOS: "17.0"
+    watchOS: "10.0"
   xcodeVersion: "15.0"
   createIntermediateGroups: true
 
@@ -35,4 +36,38 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wheredaflock.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  WhereDaFlockUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: WhereDaFlockUITests
+    dependencies:
+      - target: WhereDaFlock
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wheredaflock.uitests
+        GENERATE_INFOPLIST_FILE: YES
+
+  WhereDaFlockWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WhereDaFlockWidgets
+    dependencies:
+      - target: WhereDaFlock
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wheredaflock.app.widgets
+        GENERATE_INFOPLIST_FILE: YES
+
+  WhereDaFlockWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: WhereDaFlockWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wheredaflock.app.watchkitapp
         GENERATE_INFOPLIST_FILE: YES

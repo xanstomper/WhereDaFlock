@@ -59,6 +59,15 @@ read the stream continuously; there is no framing beyond newline-delimited JSON
 | `wifi_oui_addr1` / `wifi_oui_addr3` | 1 |
 | `wifi_ssid` | 0 |
 
+### 1.4 Wireless BLE GATT Telemetry Protocol
+
+When `USE_BLE_TELEMETRY` is enabled on the ESP32 dongle, real-time detection lines are broadcast over Bluetooth Low Energy to any paired mobile companion:
+
+* **Primary Service UUID:** `96F10C00-6DF1-4C00-8000-00805F9B34FB`
+* **Telemetry TX Characteristic:** `96F10C01-6DF1-4C00-8000-00805F9B34FB` (Properties: `NOTIFY` | `READ`)
+* **Payload Format:** UTF-8 encoded NDJSON matching the serial detection line schema.
+* **Subscription:** The iOS companion subscribes via Client Characteristic Configuration Descriptor (CCCD `0x2902`).
+
 ---
 
 ## 2. Heartbeat
