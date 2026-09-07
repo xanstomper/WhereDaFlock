@@ -93,9 +93,9 @@ if command -v pio &>/dev/null; then
 elif command -v arduino-cli &>/dev/null; then
     echo -e "${GREEN}[✓] Using Arduino CLI to compile and upload...${NC}"
     cd "$REPO_DIR"
-    SKETCH="firmware/WhereDaFlock_scanner.ino"
+    SKETCH="firmware/WhereDaFlock_scanner.cpp"
     if [[ "$ENV_NAME" == *"ble"* ]]; then
-        SKETCH="firmware/WhereDaFlock_ble.ino"
+        SKETCH="firmware/WhereDaFlock_ble.cpp"
     fi
     arduino-cli compile --fqbn esp32:esp32:esp32s3 "$SKETCH"
     arduino-cli upload -p "$SELECTED_PORT" --fqbn esp32:esp32:esp32s3 "$SKETCH"

@@ -157,7 +157,7 @@ tool must be kept in sync manually (documented in `DETECTION-GUIDE.md` §7).
 
 The firmware reads one JSON command per line on the same USB CDC link over
 which detections stream. Supported commands (see `firmware/src/session.h` and
-`WhereDaFlock_scanner.ino`):
+`WhereDaFlock_scanner.cpp`):
 
 | Command | Effect |
 |---------|--------|

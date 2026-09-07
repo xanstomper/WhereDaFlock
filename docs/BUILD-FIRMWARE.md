@@ -56,10 +56,10 @@ If you prefer the Arduino toolchain:
 arduino-cli core install esp32:esp32
 
 # 2. Compile for the ESP32-S3
-arduino-cli compile --fqbn esp32:esp32:esp32s3 WhereDaFlock_scanner.ino
+arduino-cli compile --fqbn esp32:esp32:esp32s3 WhereDaFlock_scanner.cpp
 
 # 3. Upload
-arduino-cli upload --fqbn esp32:esp32:esp32s3 --port /dev/ttyUSB0 WhereDaFlock_scanner.ino
+arduino-cli upload --fqbn esp32:esp32:esp32s3 --port /dev/ttyUSB0 WhereDaFlock_scanner.cpp
 
 # 4. Monitor
 arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200

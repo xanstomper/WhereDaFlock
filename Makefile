@@ -15,7 +15,7 @@
 PY=python3
 GO=go
 
-.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble emulator signal signal-ble signal-stop analyze flash verify ci help
+.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble m5 emulator signal signal-ble signal-stop analyze flash verify ci help
 
 test:
 	$(PY) firmware/tests/test_detection.py
@@ -54,7 +54,15 @@ ble:
 
 firmware: wifi ble
 
+m5:
+	cd firmware && pio run -e m5stickc_plus -e m5stickc_plus_ble -e m5stickc \
+		-e m5stack_cores3 -e m5stack_stamps3 -e m5stack_generic
+
 emulator:
+	cd tools/emulator && pio ci FlockCam_emulator.ino \
+		--board esp32-s3-devkitc-1 \
+		--project-option "platform=espressif32@6.9.0" \
+		--project-option "framework=arduino" || \
 	cd tools/emulator && pio run -e esp32dev || \
 		echo "Build with: cd tools/emulator && pio run -e esp32dev"
 

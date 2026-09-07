@@ -3,9 +3,9 @@
 A pair of **receive-only** detectors for Flock Safety ALPR / edge cameras, both
 running on a low-cost ESP32 microcontroller:
 
-- **`WhereDaFlock_scanner.ino`** — 2.4GHz **WiFi promiscuous** sniffer that
+- **`WhereDaFlock_scanner.cpp`** — 2.4GHz **WiFi promiscuous** sniffer that
   detects Flock wildcard probe requests by OUI + IE fingerprint.
-- **`WhereDaFlock_ble.ino`** — **BLE** beacon scanner that detects Flock
+- **`WhereDaFlock_ble.cpp`** — **BLE** beacon scanner that detects Flock
   advertisements by their manufacturer Company Identifier **`0x09C8`**.
 
 Each streams detections as NDJSON over USB/serial with optional buzzer + LED
@@ -78,14 +78,33 @@ pio device monitor
 ### ...or Arduino CLI
 
 ```bash
-arduino-cli compile --fqbn esp32:esp32:esp32s3 WhereDaFlock_scanner.ino
-arduino-cli upload --fqbn esp32:esp32:esp32s3 --port /dev/ttyUSB0 WhereDaFlock_scanner.ino
+arduino-cli compile --fqbn esp32:esp32:esp32s3 WhereDaFlock_scanner.cpp
+arduino-cli upload --fqbn esp32:esp32:esp32s3 --port /dev/ttyUSB0 WhereDaFlock_scanner.cpp
 arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 ```
 
 `platformio.ini` / `partitions.csv` live at the repo root if you use the full
 project; for a bare firmware build you can create a minimal `platformio.ini`
 targeting `xiao_esp32s3` with a 6 MB app / 1.94 MB SPIFFS partition.
+
+### M5Stack boards (M5StickC, M5StickC Plus 1.1, Core, Atom, StampS3)
+
+On M5 devices the firmware uses **M5Unified**, so one source runs on the whole
+M5Stack family. Build for your **M5StickC Plus 1.1** with:
+
+```bash
+cd firmware
+pio run -e m5stickc_plus            # WiFi detector (you)
+pio run -e m5stickc_plus_ble        # BLE beacon scanner (you)
+pio run -e m5stickc                 # original M5StickC
+pio run -e m5stack_cores3           # M5Stack CoreS3
+pio run -e m5stack_stamps3          # M5Stack StampS3
+pio run -e m5stack_generic          # any other (override board=)
+```
+
+`firmware/src/hal.h` is the board-abstraction seam; see
+[`docs/HARDWARE-M5.md`](../docs/HARDWARE-M5.md) for the M5StickC Plus 1.1 pins
+(red LED on GPIO 10, buzzer, button) and wiring details.
 
 ---
 
@@ -134,8 +153,8 @@ python3 tests/test_detection.py
 
 ```
 firmware/
-├── WhereDaFlock_scanner.ino   # ESP32 WiFi promiscuous detector (main firmware)
-├── WhereDaFlock_ble.ino       # ESP32 BLE beacon scanner (mfr ID 0x09C8)
+├── WhereDaFlock_scanner.cpp   # ESP32 WiFi promiscuous detector (main firmware)
+├── WhereDaFlock_ble.cpp       # ESP32 BLE beacon scanner (mfr ID 0x09C8)
 ├── src/
 │   ├── signatures.h           # Flock WiFi OUI list + confidence tiers
 │   ├── ble_signatures.h       # Flock BLE signatures (0x09C8, names, UUIDs)
@@ -160,7 +179,7 @@ firmware/
 
 ## BLE beacon scanner
 
-`WhereDaFlock_ble.ino` is the BLE detector. It matches the Flock Safety
+`WhereDaFlock_ble.cpp` is the BLE detector. It matches the Flock Safety
 manufacturer Company Identifier **`0x09C8`** (little-endian first 2 bytes of
 the advertisement's manufacturer data) plus advertised-name and service-UUID
 patterns, and emits the same NDJSON stream with `protocol:"ble"`.

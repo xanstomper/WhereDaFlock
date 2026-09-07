@@ -25,6 +25,7 @@
 #include <BLEAdvertisedDevice.h>
 #include <ArduinoJson.h>
 #include "src/ble_signatures.h"
+#include "src/hal.h"
 
 using namespace WhereDaFlockBLE;
 
@@ -121,11 +122,11 @@ bool matchesServiceUUID(BLEAdvertisedDevice* device, String& which) {
 // Alert buzz + LED flash.
 // ---------------------------------------------------------------------------
 void beep(int ms = ALERT_MS) {
-  digitalWrite(LED_PIN, LED_ACTIVE_HIGH ? HIGH : LOW);
-  tone(BUZZER_PIN, ALERT_FREQ_HZ);
+  wdf_hal::ledSet(true);
+  wdf_hal::toneStart(ALERT_FREQ_HZ);
   delay(ms);
-  noTone(BUZZER_PIN);
-  digitalWrite(LED_PIN, LED_ACTIVE_HIGH ? LOW : HIGH);
+  wdf_hal::toneStop();
+  wdf_hal::ledSet(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -231,9 +232,10 @@ void setup() {
   Serial.begin(115200);
   delay(300);
 
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LED_ACTIVE_HIGH ? LOW : HIGH);
-  pinMode(BUZZER_PIN, OUTPUT);
+  // Board-neutral LED/buzzer init (raw GPIO or M5Unified for M5Stack boards).
+  wdf_hal::ledInit();
+  wdf_hal::ledSet(false);
+  wdf_hal::buzzerInit();
 
   Serial.println("WhereDaFlock BLE v1.0.0 - passive Flock BLE beacon scanner");
   Serial.println("RECEIVE-ONLY. No transmissions, no connections.");
@@ -245,13 +247,16 @@ void setup() {
   pBLEScan->setActiveScan(true);     // request scan responses for more info
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);
-  pBLEScan->setMaxResults(0);        // process results live, don't buffer
+  // Results are processed live via the callback; start() returns the set which
+  // we discard each cycle.
 
   Serial.println("Scanning...");
 }
 
 void loop() {
-  BLEScanResults* found = pBLEScan->start(SCAN_DURATION, false);
+  // start() returns BLEScanResults by value; the callback has already
+  // processed matches live, so we just clear and move on.
+  (void)pBLEScan->start(SCAN_DURATION, false);
   pBLEScan->clearResults();
 
   // Heartbeat while likely Flock devices remain in range.
@@ -267,5 +272,5 @@ void loop() {
     }
   }
 
-  delete found;
+  // start() returns BLEScanResults by value; nothing to free.
 }
