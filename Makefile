@@ -68,7 +68,7 @@ verify:
 	./Backend/scripts/verify_deployment.sh
 
 dashboard-smoke:
-	cd api && $(PY) -c "import app as m; assert len(m.OUI_DATABASE) > 0, 'OUI DB empty'; print('[ok] dashboard imports,', len(m.OUI_DATABASE), 'OUI entries')"
+	cd api && $(PY) smoke_test.py
 
 ci: test backend-test dashboard-smoke
 	$(PY) -c 'import json; d = json.load(open("WhereDaFlock/Resources/cameras.json")); assert len(d) > 1000; print(f"[✓] {len(d)} cameras validated.")'
