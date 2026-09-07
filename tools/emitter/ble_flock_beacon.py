@@ -2,135 +2,138 @@
 """
 WhereDaFlock - software Flock BLE beacon broadcaster (runs on the PC)
 =====================================================================
-Emits a REAL over-the-air Bluetooth Low Energy advertisement carrying the
-Flock Safety signals the WhereDaFlock BLE detector looks for:
+Emits a REAL over-the-air Bluetooth Low Energy legacy (Bluetooth 4.2)
+advertisement carrying the Flock Safety signals the WhereDaFlock detector looks for:
 
   * manufacturer Company Identifier 0x09C8  (decisive, weight 70)
   * advertised name "FS Ext Battery"         (supporting, weight 45)
   * Battery service UUID 0x180F              (supporting, weight 20)
 
-Uses the native Linux BlueZ D-Bus LEAdvertisingManager1 interface on hci0,
-with automatic fallback to bluetoothctl if dbus is unavailable.
+Transmits on primary advertising channels 37, 38, 39 using raw HCI ADV_IND packets
+compatible with Bluetooth 4.2 receivers (like the ESP32-PICO-D4 on M5StickC Plus).
 Bluetooth uses a separate radio from WiFi; WiFi is never touched.
 """
 
 import argparse
+import os
+import subprocess
 import sys
 import time
 
 FLOCK_MFR_ID = 0x09C8
 DEFAULT_NAME = "FS Ext Battery"
-BATTERY_SERVICE_UUID = "180F"
+BATTERY_SERVICE_UUID = 0x180F
 
 
-def run_dbus_advertiser(name: str, duration_sec: float):
-    import dbus
-    import dbus.service
-    import dbus.mainloop.glib
-    from gi.repository import GLib
+def check_sudo():
+    if os.geteuid() != 0:
+        print("[*] Raw HCI operations require root. Re-executing with sudo...")
+        cmd = ["sudo", sys.executable] + sys.argv
+        os.execvp("sudo", cmd)
 
-    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-    bus = dbus.SystemBus()
 
-    class FlockAdvertisement(dbus.service.Object):
-        def __init__(self, bus, index=0):
-            self.path = f"/org/bluez/wdf/advertisement{index}"
-            super().__init__(bus, self.path)
+def run_cmd(cmd_list, check=True):
+    res = subprocess.run(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if check and res.returncode != 0:
+        raise RuntimeError(f"Command failed: {' '.join(cmd_list)}\n{res.stderr}")
+    return res
 
-        def get_properties(self):
-            return {
-                'org.bluez.LEAdvertisement1': {
-                    'Type': dbus.String('peripheral'),
-                    'LocalName': dbus.String(name),
-                    'ServiceUUIDs': dbus.Array([BATTERY_SERVICE_UUID], signature='s'),
-                    'ManufacturerData': dbus.Dictionary({
-                        dbus.UInt16(FLOCK_MFR_ID): dbus.Array([0x03, 0x02, 0x01], signature='y')
-                    }, signature='qv'),
-                    'Discoverable': dbus.Boolean(True),
-                }
-            }
 
-        @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
-        def GetAll(self, interface):
-            return self.get_properties().get(interface, {})
+def build_hci_adv_data(name: str) -> str:
+    # 31-byte max advertising packet:
+    # 1. Flags (3 bytes): 02 01 06
+    adv_bytes = [0x02, 0x01, 0x06]
 
-        @dbus.service.method('org.bluez.LEAdvertisement1', in_signature='', out_signature='')
-        def Release(self):
-            print("[*] Advertisement released by BlueZ.")
+    # 2. Complete 16-bit Service UUIDs: 0x180F (4 bytes)
+    adv_bytes += [0x03, 0x03, 0x0F, 0x18]
 
-    adapter = bus.get_object('org.bluez', '/org/bluez/hci0')
-    adv_mgr = dbus.Interface(adapter, 'org.bluez.LEAdvertisingManager1')
-    adv = FlockAdvertisement(bus)
-    loop = GLib.MainLoop()
+    # 3. Manufacturer Specific Data: Company 0x09C8 (Flock) + 3-byte payload (7 bytes)
+    adv_bytes += [0x06, 0xFF, 0xC8, 0x09, 0x03, 0x02, 0x01]
 
-    def on_registered():
-        print(f"[*] BLE advertising active on hci0:")
-        print(f"    Name    : {name}")
-        print(f"    MFR ID  : 0x{FLOCK_MFR_ID:04X} (Flock Safety)")
-        print(f"    Service : 0x{BATTERY_SERVICE_UUID}")
-        if duration_sec > 0:
-            print(f"[*] Running for {duration_sec:.0f} seconds (Ctrl-C to stop early)...")
-            GLib.timeout_add_seconds(int(duration_sec), on_timeout)
-        else:
-            print("[*] Running indefinitely (Ctrl-C to stop)...")
+    # 4. Local Name (truncated to fit within 31 bytes total)
+    max_name_len = 31 - len(adv_bytes) - 2  # reserve len + type bytes
+    name_bytes = list(name.encode('utf-8')[:max_name_len])
+    adv_bytes += [len(name_bytes) + 1, 0x09] + name_bytes
 
-    def on_timeout():
-        print("[*] Duration elapsed, unregistering advertisement...")
-        try:
-            adv_mgr.UnregisterAdvertisement(adv.path)
-        except Exception:
-            pass
-        loop.quit()
+    total_len = len(adv_bytes)
+    while len(adv_bytes) < 31:
+        adv_bytes.append(0x00)
 
-    def on_error(err):
-        print(f"[-] Failed to register advertisement: {err}")
-        loop.quit()
+    hex_parts = [f"{total_len:02x}"] + [f"{b:02x}" for b in adv_bytes]
+    return " ".join(hex_parts)
 
-    adv_mgr.RegisterAdvertisement(adv.path, {}, reply_handler=on_registered, error_handler=on_error)
+
+def start_advertising(adapter: str, name: str):
+    # Disable advertising first
+    run_cmd(["hcitool", "-i", adapter, "cmd", "0x08", "0x000a", "00"], check=False)
+
+    # Set parameters: 100ms min (0x00a0), 120ms max (0x00c0), ADV_IND (00), channels 37,38,39 (0x07)
+    run_cmd(["hcitool", "-i", adapter, "cmd", "0x08", "0x0006",
+             "a0", "00", "c0", "00", "00", "00", "00", "00", "00", "00", "00", "00", "00", "07", "00"])
+
+    # Set advertising data
+    adv_hex = build_hci_adv_data(name)
+    hex_tokens = adv_hex.split()
+    run_cmd(["hcitool", "-i", adapter, "cmd", "0x08", "0x0008"] + hex_tokens)
+
+    # Enable advertising
+    run_cmd(["hcitool", "-i", adapter, "cmd", "0x08", "0x000a", "01"])
+
+
+def stop_advertising(adapter: str):
     try:
-        loop.run()
-    except KeyboardInterrupt:
-        print("\n[*] Stopping advertiser...")
-        try:
-            adv_mgr.UnregisterAdvertisement(adv.path)
-        except Exception:
-            pass
+        run_cmd(["hcitool", "-i", adapter, "cmd", "0x08", "0x000a", "00"], check=False)
+    except Exception:
+        pass
 
 
 def main():
     parser = argparse.ArgumentParser(description="WhereDaFlock software Flock BLE beacon")
+    parser.add_argument("--adapter", default="hci0", help="Bluetooth adapter (default: hci0)")
     parser.add_argument("--secs", type=float, default=0, help="Run for N seconds, then stop")
     parser.add_argument("--name", default=DEFAULT_NAME, help="Advertised device name")
     parser.add_argument("--stop", action="store_true", help="Stop advertising")
     args = parser.parse_args()
 
+    check_sudo()
+
     if args.stop:
-        print("[*] Stopped.")
+        stop_advertising(args.adapter)
+        print(f"[*] Advertising stopped on {args.adapter}.")
         return
 
+    was_bt_active = False
+    status_res = subprocess.run(["systemctl", "is-active", "--quiet", "bluetooth"])
+    if status_res.returncode == 0:
+        was_bt_active = True
+        print("[*] Temporarily pausing bluetooth.service to allow raw legacy HCI advertising...")
+        subprocess.run(["systemctl", "stop", "bluetooth"])
+
     try:
-        run_dbus_advertiser(args.name, args.secs)
-    except ImportError:
-        import subprocess
-        print("[*] dbus/glib not available in this python environment; falling back to bluetoothctl...")
-        p = subprocess.Popen(['bluetoothctl'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        cmd = f"menu advertise\nclear\nmanufacturer 0x09c8 0x03 0x02 0x01\nname '{args.name}'\nuuids 0x180f\nback\nadvertise on\n"
-        p.stdin.write(cmd)
-        p.stdin.flush()
-        print(f"[*] Advertising via bluetoothctl. Name: {args.name}, MFR: 0x09C8")
-        try:
-            if args.secs > 0:
-                time.sleep(args.secs)
-            else:
-                while True:
-                    time.sleep(3600)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            p.stdin.write("advertise off\nexit\n")
-            p.stdin.flush()
-            p.communicate(timeout=3)
-            print("[*] Advertising stopped.")
+        run_cmd(["hciconfig", args.adapter, "up"])
+        start_advertising(args.adapter, args.name)
+        print(f"[*] BLE legacy advertising active on {args.adapter}:")
+        print(f"    Name    : {args.name}")
+        print(f"    MFR ID  : 0x{FLOCK_MFR_ID:04X} (Flock Safety)")
+        print(f"    Service : 0x{BATTERY_SERVICE_UUID:04X} (Battery Service)")
+        print(f"    Type    : ADV_IND (Legacy BT 4.2, channels 37/38/39)")
+
+        if args.secs > 0:
+            print(f"[*] Running for {args.secs:.0f} seconds (Ctrl-C to stop early)...")
+            time.sleep(args.secs)
+        else:
+            print("[*] Running indefinitely (Ctrl-C to stop)...")
+            while True:
+                time.sleep(3600)
+    except KeyboardInterrupt:
+        print("\n[*] Stopping advertiser...")
+    finally:
+        print("[*] Cleaning up BLE broadcast...")
+        stop_advertising(args.adapter)
+        if was_bt_active:
+            print("[*] Restoring bluetooth.service...")
+            subprocess.run(["systemctl", "start", "bluetooth"])
+        print("[*] Done.")
 
 
 if __name__ == "__main__":

@@ -438,7 +438,14 @@ static void drainAlertQueue() {
       tierChirp(e->tier);
       ledSet(true); ledOffAt = millis() + LED_FLASH_MS;
 #ifdef USE_M5STICKC_PLUS_DISPLAY
-      m5stickDisplayShowAlert(method, mac, e->rssi, e->channel, ALERT_COOLDOWN_MS);
+      const char* proto = "WiFi 2.4G";
+      const char* name = (e->ssid[0] != '\0') ? (const char*)e->ssid : "Flock Falcon ALPR";
+      const char* vendor = "Flock Safety (OUI)";
+      const char* methodFull = (e->tier >= 4) ? "IE_FINGERPRINT" : ((e->tier >= 3) ? "WILDCARD_PROBE" : "OUI_ADDR2");
+      const char* verdict = (e->tier >= 3) ? "FLOCK_CONFIRMED" : "FLOCK_SUSPECT";
+      uint8_t conf = (e->tier >= 4) ? 100 : ((e->tier >= 3) ? 85 : ((e->tier >= 2) ? 65 : 40));
+      float distM = (e->rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)e->rssi) / 20.0f);
+      m5stickDisplayShowAlertRich(proto, name, mac, vendor, methodFull, verdict, e->rssi, distM, conf, e->channel, ALERT_COOLDOWN_MS);
 #else
       dongleDisplayShowAlert(method, mac, e->rssi, e->channel, ALERT_COOLDOWN_MS);
 #endif
@@ -598,7 +605,9 @@ void setup() {
 }
 
 void loop() {
+  WhereDaFlockBLE::checkAlerts();
   if (WhereDaFlockBLE::blePoll()) {   // BLE scan window owns the radio
+    WhereDaFlockBLE::checkAlerts();
     #ifdef USE_M5STICKC_PLUS_DISPLAY
     m5stickDisplayTick(millis(), currentChannel, wdfDetCount);
     #else
@@ -612,6 +621,7 @@ void loop() {
   drainAlertQueue();
   updateChannelMode();
   heartbeatTick();
+  WhereDaFlockBLE::checkAlerts();
   #ifdef USE_M5STICKC_PLUS_DISPLAY
   m5stickDisplayTick(millis(), currentChannel, wdfDetCount);
 #else

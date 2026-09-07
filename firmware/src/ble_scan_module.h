@@ -25,6 +25,8 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 #include "ble_signatures.h"
+#include "display_m5stick.h"
+#include "display_dongle.h"
 
 extern int wdfDetCount;
 void tierChirp(uint8_t tier);
@@ -51,6 +53,23 @@ struct Slot {
 };
 Slot slots[MAX_DEVICES];
 int slotCount = 0;
+
+// Thread-safe alert mailbox between BLE callback task and main loop
+struct BleAlertMailbox {
+  char protocol[12];
+  char name[32];
+  char mac[24];
+  char vendor[32];
+  char method[24];
+  char verdict[24];
+  int8_t rssi;
+  float distM;
+  uint8_t confidence;
+  uint16_t hits;
+  bool isNew;
+  volatile bool pending;
+};
+static BleAlertMailbox alertMailbox = {};
 
 // RSSI -> meters (same reference as the iOS app).
 float bleDistance(int rssi) {
@@ -135,31 +154,56 @@ class BleScanCb : public BLEAdvertisedDeviceCallbacks {
     s.method = method; s.lastSeenAt = millis();
     bool isLikely = (score >= LIKELY_THRESHOLD);
 
-    // Emit the same field names/layout the iOS app + API expect for BLE.
-    Serial.printf("{\"event\":\"%s\",\"protocol\":\"ble\",\"mac\":\"%s\","
-                  "\"name\":\"%s\",\"rssi\":%d,\"dist_m\":%.2f,\"conf\":%d,"
-                  "\"method\":\"%s\",\"mfr_id\":\"0x%04X\",\"verdict\":\"%s\"}\n",
-                  isNew ? "new" : "update", mac,
-                  name.length() ? name.c_str() : "?",
-                  rssi, bleDistance(rssi), score, method.c_str(),
-                  (unsigned)FLOCK_MFR_ID,
-                  isLikely ? "FLOCK_LIKELY"
-                  : (score >= POSSIBLE_THRESHOLD ? "FLOCK_POSSIBLE" : "CANDIDATE"));
+    // Rate-limit serial emission: immediate on isNew, otherwise at most once per second
+    static unsigned long lastSerialEmit = 0;
+    unsigned long now = millis();
+    if (isNew || (now - lastSerialEmit >= 1000)) {
+      lastSerialEmit = now;
+      Serial.printf("{\"event\":\"%s\",\"protocol\":\"ble\",\"mac\":\"%s\","
+                    "\"name\":\"%s\",\"rssi\":%d,\"dist_m\":%.2f,\"conf\":%d,"
+                    "\"method\":\"%s\",\"mfr_id\":\"0x%04X\",\"verdict\":\"%s\"}\n",
+                    isNew ? "new" : "update", mac,
+                    name.length() ? name.c_str() : "FS Ext Battery",
+                    rssi, bleDistance(rssi), score, method.c_str(),
+                    (unsigned)FLOCK_MFR_ID,
+                    isLikely ? "FLOCK_LIKELY"
+                    : (score >= POSSIBLE_THRESHOLD ? "FLOCK_POSSIBLE" : "CANDIDATE"));
+    }
+
     if (isLikely || isNew) s.reported = true;
-    if (isLikely && isNew) {
-      ::wdfDetCount++;
-      ::tierChirp(4);
-#ifdef USE_M5STICKC_PLUS_DISPLAY
-      m5stickDisplayShowAlert("BLE_FLOCK", mac, rssi, 0, 4000);
-#else
-      dongleDisplayShowAlert("BLE_FLOCK", mac, rssi, 0, 4000);
-#endif
+
+    if (isLikely) {
+      static uint16_t bleHitCounter = 0;
+      bleHitCounter++;
+
+      // Safely handoff alert telemetry to loop() on the main thread
+      if (!alertMailbox.pending) {
+        strncpy(alertMailbox.protocol, "BLE 4.2", sizeof(alertMailbox.protocol) - 1);
+        strncpy(alertMailbox.name, name.length() ? name.c_str() : "FS Ext Battery", sizeof(alertMailbox.name) - 1);
+        strncpy(alertMailbox.mac, mac, sizeof(alertMailbox.mac) - 1);
+        strncpy(alertMailbox.vendor, "Flock Safety (0x09C8)", sizeof(alertMailbox.vendor) - 1);
+        strncpy(alertMailbox.method, method.c_str(), sizeof(alertMailbox.method) - 1);
+        strncpy(alertMailbox.verdict, "FLOCK_LIKELY", sizeof(alertMailbox.verdict) - 1);
+        alertMailbox.rssi = rssi;
+        alertMailbox.distM = bleDistance(rssi);
+        alertMailbox.confidence = score;
+        alertMailbox.hits = bleHitCounter;
+        alertMailbox.isNew = isNew;
+        alertMailbox.pending = true;
+      } else {
+        alertMailbox.rssi = rssi;
+        alertMailbox.distM = bleDistance(rssi);
+        alertMailbox.hits = bleHitCounter;
+      }
     }
   }
 };
 
 static void bleScanDoneCb(BLEScanResults results) {
   // BLE scan duration complete
+  if (pBLEScan) {
+    pBLEScan->clearResults();
+  }
 }
 
 // Time-slicing state machine.
@@ -190,23 +234,56 @@ inline bool blePoll() {
   bool wantBle = (elapsed >= WIFI_WINDOW_MS);
 
   if (wantBle && !inBleWindow) {
-    // Entering the BLE window: pause WiFi promiscuous sniffing, start BLE
+    // Entering the BLE window: pause WiFi promiscuous sniffing, start asynchronous BLE scan
     inBleWindow = true;
     esp_wifi_set_promiscuous(false);
     Serial.printf("[wdf] BLE scan window %us\n", BLE_SCAN_SECONDS);
     if (pBLEScan) {
-      pBLEScan->start(BLE_SCAN_SECONDS, false);
-      pBLEScan->clearResults();
+      // Pass bleScanDoneCb so start() is ASYNCHRONOUS and never blocks loop()!
+      pBLEScan->start(BLE_SCAN_SECONDS, bleScanDoneCb, false);
     }
   }
   if (!wantBle && inBleWindow) {
     // Exiting the BLE window back to WiFi.
     inBleWindow = false;
+    if (pBLEScan) {
+      pBLEScan->stop();
+      pBLEScan->clearResults();
+    }
     esp_wifi_set_promiscuous(true);
     Serial.println("[wdf] BLE window over, returning to WiFi");
   }
 
   return inBleWindow;
+}
+
+// Called from main loop() context to safely process BLE alerts on the main thread
+inline void checkAlerts() {
+  if (alertMailbox.pending) {
+    bool isNew = alertMailbox.isNew;
+    int8_t rssi = alertMailbox.rssi;
+    float dist = alertMailbox.distM;
+    uint16_t hits = alertMailbox.hits;
+    alertMailbox.pending = false;
+
+    if (isNew) {
+      ::wdfDetCount++;
+      ::tierChirp(4);
+#ifdef USE_M5STICKC_PLUS_DISPLAY
+      m5stickDisplayShowAlertRich(alertMailbox.protocol, alertMailbox.name,
+                                 alertMailbox.mac, alertMailbox.vendor,
+                                 alertMailbox.method, alertMailbox.verdict,
+                                 rssi, dist, alertMailbox.confidence,
+                                 0, 6000);
+#else
+      dongleDisplayShowAlert("BLE_FLOCK", alertMailbox.mac, rssi, 0, 6000);
+#endif
+    } else {
+#ifdef USE_M5STICKC_PLUS_DISPLAY
+      m5stickDisplayUpdateAlertLive(rssi, dist, hits);
+#endif
+    }
+  }
 }
 
 } // namespace WhereDaFlockBLE
@@ -216,6 +293,7 @@ inline bool blePoll() {
 namespace WhereDaFlockBLE {
 inline void bleSetup() {}
 inline bool blePoll() { return false; }
+inline void checkAlerts() {}
 }
 
 #endif // WDF_ENABLE_BLE

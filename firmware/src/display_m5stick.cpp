@@ -24,8 +24,13 @@
 
 // M5Stick ST7789 panel is BGR. HW_RED (0xF800) renders blue.
 // HW_RED is the byte-swapped value that actually displays as red.
-#define HW_RED    0x001F
-#define HW_DKRED  0x0010
+#define HW_RED       0x001F
+#define HW_DKRED     0x0010
+#define HW_GREEN     0x07E0
+#define HW_YELLOW    0x07FF
+#define HW_ORANGE    0x041F
+#define HW_CYAN      0xFFE0
+#define HW_DARKGREY  0x39E7
 
 static TFT_eSPI tft = TFT_eSPI();
 
@@ -182,35 +187,270 @@ void m5stickDisplayShowIdle(uint8_t ch, int detCount) {
 }
 
 
-static void drawAlertHUD(unsigned long now) {
+// Extended alert details for rich tactical HUD
+struct AlertState {
+  char protocol[10];
+  char name[32];
+  char mac[24];
+  char vendor[32];
+  char method[24];
+  char verdict[24];
+  int8_t rssi;
+  float distM;
+  uint8_t confidence;
+  uint8_t channel;
+  uint16_t hits;
+  unsigned long startedAt;
+  unsigned long untilMs;
+  int8_t lastRenderedRssi;
+  uint16_t lastRenderedHits;
+  int lastRenderedSecs;
+  bool fullDrawn;
+};
+static AlertState alertData = {};
+
+static void drawAlertHUDDynamic(unsigned long now);
+
+static void drawAlertHUDFull() {
+  tft.fillScreen(TFT_BLACK);
+
+  // 1. Header Banner (Y=0..19)
+  tft.fillRect(0, 0, TFT_WIDTH_PX, 19, HW_RED);
+  tft.setTextDatum(ML_DATUM);
   tft.setTextColor(TFT_WHITE, HW_RED);
-  tft.setTextDatum(MC_DATUM);
-  tft.fillScreen(HW_RED);
-  tft.drawString("ALERT!", TFT_WIDTH_PX/2, 25, 4);
-  
-  tft.setTextColor(TFT_WHITE, TFT_TRANSPARENT);
-  tft.drawString(lastMethod, TFT_WIDTH_PX/2, 60, 2);
-  tft.drawString(lastMac, TFT_WIDTH_PX/2, 85, 2);
-  tft.drawString(String(lastRssi) + " dBm | CH " + String(lastChannel), TFT_WIDTH_PX/2, 110, 2);
+  tft.drawString("[!] TARGET: FLOCK DETECTED", 6, 9, 2);
+
+  tft.setTextDatum(MR_DATUM);
+  String badge = String("[") + alertData.protocol + "] " + String(alertData.confidence) + "%";
+  tft.drawString(badge, TFT_WIDTH_PX - 6, 9, 2);
+
+  // 2. Identity Card (Y=21..65, H=44)
+  tft.drawRect(2, 21, 236, 44, HW_DKRED);
+  tft.drawRect(3, 22, 234, 42, HW_DKRED);
+
+  // Row 1 (Y=24): Device Name
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  tft.drawString("NAME:", 6, 24, 1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(alertData.name, 42, 24, 2);
+
+  // Row 2 (Y=40): MAC address (Font 2) + Channel
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+  tft.drawString("MAC: ", 6, 40, 2);
+  tft.setTextColor(HW_CYAN, TFT_BLACK);
+  tft.drawString(alertData.mac, 42, 40, 2);
+
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  if (alertData.channel > 0) {
+    tft.drawString(String("CH ") + alertData.channel, 232, 40, 2);
+  } else {
+    tft.drawString("BLE-ADV", 232, 40, 2);
+  }
+
+  // Row 3 (Y=54): Vendor & Trigger Method
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+  tft.drawString("MFR: ", 6, 54, 1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(alertData.vendor, 34, 54, 1);
+
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+  tft.drawString(String("MET: ") + alertData.method, 232, 54, 1);
+
+  // 3. Telemetry & Proximity Card (Y=67..113, H=46)
+  tft.drawRect(2, 67, 236, 46, HW_DKRED);
+  tft.drawRect(3, 68, 234, 44, HW_DKRED);
+
+  // Row 1 (Y=70): Static labels
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  tft.drawString("RSSI:", 6, 70, 1);
+  tft.drawString("DIST:", 88, 70, 1);
+
+  // Row 3 (Y=100): Verdict
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_RED, TFT_BLACK);
+  tft.drawString(alertData.verdict, 6, 100, 1);
+
+  // 4. Footer Bar (Y=115..134, H=20)
+  tft.fillRect(0, 115, TFT_WIDTH_PX, 20, HW_DKRED);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_WHITE, HW_DKRED);
+  tft.drawString("[A] DISMISS", 6, 124, 1);
+
+  tft.setTextDatum(MR_DATUM);
+  float vbat = m5stickGetBatteryVoltage();
+  tft.drawString(String("BAT:") + String(vbat, 1) + "V", 234, 124, 1);
+
+  alertData.fullDrawn = true;
+  alertData.lastRenderedRssi = -128;
+  alertData.lastRenderedHits = 0;
+  alertData.lastRenderedSecs = -1;
+
+  // Render initial dynamic values
+  drawAlertHUDDynamic(millis());
 }
 
-void m5stickDisplayShowAlert(const char* method, const char* mac, int8_t rssi,
-                             uint8_t ch, unsigned long alertMs) {
+static void drawAlertHUDDynamic(unsigned long now) {
+  if (!alertData.fullDrawn) {
+    drawAlertHUDFull();
+    return;
+  }
+
+  // 1. Countdown timer (updated once per second)
+  int remSecs = 0;
+  if ((long)(alertData.untilMs - now) > 0) {
+    remSecs = (int)((alertData.untilMs - now) / 1000);
+  }
+  if (remSecs != alertData.lastRenderedSecs) {
+    alertData.lastRenderedSecs = remSecs;
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, HW_DKRED);
+    char timerBuf[20];
+    snprintf(timerBuf, sizeof(timerBuf), "RESET: %ds  ", remSecs);
+    tft.drawString(timerBuf, 120, 124, 1);
+  }
+
+  // 2. Check if RSSI or hits changed
+  if (alertData.rssi != alertData.lastRenderedRssi || alertData.hits != alertData.lastRenderedHits) {
+    alertData.lastRenderedRssi = alertData.rssi;
+    alertData.lastRenderedHits = alertData.hits;
+
+    // Draw RSSI value (Y=70)
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    char rssiBuf[16];
+    snprintf(rssiBuf, sizeof(rssiBuf), "%d dBm  ", alertData.rssi);
+    tft.drawString(rssiBuf, 38, 70, 1);
+
+    // Draw Distance value (Y=70)
+    char distBuf[16];
+    if (alertData.distM < 0) {
+      snprintf(distBuf, sizeof(distBuf), "? m   ");
+    } else if (alertData.distM < 1.0f) {
+      snprintf(distBuf, sizeof(distBuf), "%.2fm ", alertData.distM);
+    } else {
+      snprintf(distBuf, sizeof(distBuf), "%.1fm ", alertData.distM);
+    }
+    tft.setTextColor(HW_YELLOW, TFT_BLACK);
+    tft.drawString(distBuf, 120, 70, 1);
+
+    // Proximity indicator tag (Y=70, right side)
+    tft.setTextDatum(TR_DATUM);
+    if (alertData.distM >= 0 && alertData.distM < 1.5f) {
+      tft.setTextColor(HW_RED, TFT_BLACK);
+      tft.drawString("[IMMEDIATE] ", 232, 70, 1);
+    } else if (alertData.distM >= 0 && alertData.distM < 4.0f) {
+      tft.setTextColor(HW_ORANGE, TFT_BLACK);
+      tft.drawString("[VERY CLOSE]", 232, 70, 1);
+    } else if (alertData.distM >= 0 && alertData.distM < 10.0f) {
+      tft.setTextColor(HW_YELLOW, TFT_BLACK);
+      tft.drawString("[NEARBY]    ", 232, 70, 1);
+    } else {
+      tft.setTextColor(HW_GREEN, TFT_BLACK);
+      tft.drawString("[IN RANGE]  ", 232, 70, 1);
+    }
+
+    // Draw 16-segment tactical signal bar (Y=82)
+    int barX = 6;
+    int barY = 82;
+    int segW = 9;
+    int segH = 8;
+    int segGap = 2;
+    int activeSegs = map(constrain((int)alertData.rssi, -95, -35), -95, -35, 0, 16);
+
+    for (int i = 0; i < 16; i++) {
+      int sx = barX + i * (segW + segGap);
+      if (i < activeSegs) {
+        uint16_t segColor;
+        if (i < 5) segColor = HW_GREEN;
+        else if (i < 11) segColor = HW_YELLOW;
+        else segColor = HW_RED;
+        tft.fillRect(sx, barY, segW, segH, segColor);
+      } else {
+        tft.fillRect(sx, barY, segW, segH, TFT_BLACK);
+        tft.drawRect(sx, barY, segW, segH, HW_DKRED);
+      }
+    }
+
+    // Signal percentage
+    int sigPct = map(constrain((int)alertData.rssi, -95, -35), -95, -35, 0, 100);
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    char sigBuf[12];
+    snprintf(sigBuf, sizeof(sigBuf), "%3d%%", sigPct);
+    tft.drawString(sigBuf, 232, 82, 1);
+
+    // Hits & Total update (Y=100)
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    char hitsBuf[24];
+    snprintf(hitsBuf, sizeof(hitsBuf), "HITS:%d  TOT:%d ", alertData.hits, idleDetCount);
+    tft.drawString(hitsBuf, 232, 100, 1);
+  }
+}
+
+void m5stickDisplayShowAlertRich(const char* protocol, const char* name, const char* mac,
+                                 const char* vendor, const char* method, const char* verdict,
+                                 int8_t rssi, float distM, uint8_t confidence,
+                                 uint8_t ch, unsigned long alertMs) {
   idleCh = ch;
   inAlert = true;
   if (alertMs == 0) alertMs = 5000;
   alertUntilMs = millis() + alertMs;
-  
-  strncpy(lastMethod, method ? method : "UNKNOWN", sizeof(lastMethod) - 1);
-  strncpy(lastMac, mac ? mac : "00:00:00:00:00:00", sizeof(lastMac) - 1);
+
+  strncpy(alertData.protocol, protocol ? protocol : "BLE", sizeof(alertData.protocol) - 1);
+  strncpy(alertData.name, (name && strlen(name) > 0) ? name : "Flock Device", sizeof(alertData.name) - 1);
+  strncpy(alertData.mac, mac ? mac : "00:00:00:00:00:00", sizeof(alertData.mac) - 1);
+  strncpy(alertData.vendor, vendor ? vendor : "Flock Safety", sizeof(alertData.vendor) - 1);
+  strncpy(alertData.method, method ? method : "UNKNOWN", sizeof(alertData.method) - 1);
+  strncpy(alertData.verdict, verdict ? verdict : "FLOCK_LIKELY", sizeof(alertData.verdict) - 1);
+  alertData.rssi = rssi;
+  alertData.distM = distM;
+  alertData.confidence = confidence;
+  alertData.channel = ch;
+  alertData.hits = 1;
+  alertData.startedAt = millis();
+  alertData.untilMs = alertUntilMs;
+  alertData.fullDrawn = false;
+  alertData.lastRenderedRssi = -128;
+  alertData.lastRenderedHits = 0;
+  alertData.lastRenderedSecs = -1;
+
+  strncpy(lastMac, alertData.mac, sizeof(lastMac) - 1);
+  strncpy(lastMethod, alertData.method, sizeof(lastMethod) - 1);
   lastRssi = rssi;
   lastChannel = ch;
-  
-  // Flash LED
-  digitalWrite(M5_LED_PIN, LOW); // LED ON
-  
-  tft.fillScreen(TFT_BLACK);
-  drawAlertHUD(millis());
+
+  digitalWrite(M5_LED_PIN, LOW); // LED ON (active-low)
+  drawAlertHUDFull();
+}
+
+void m5stickDisplayUpdateAlertLive(int8_t rssi, float distM, uint16_t hits) {
+  if (!inAlert) return;
+  alertData.rssi = rssi;
+  alertData.distM = distM;
+  alertData.hits = hits;
+  // Keep alert active while tracking live signal
+  alertUntilMs = millis() + 5000;
+  alertData.untilMs = alertUntilMs;
+}
+
+void m5stickDisplayShowAlert(const char* method, const char* mac, int8_t rssi,
+                             uint8_t ch, unsigned long alertMs) {
+  bool isBle = (method && strstr(method, "BLE") != nullptr);
+  const char* proto = isBle ? "BLE" : "WIFI";
+  const char* name = isBle ? "FS Ext Battery" : "Flock Cam ALPR";
+  const char* vendor = isBle ? "Flock Safety (0x09C8)" : "Flock Safety (OUI)";
+  const char* verdict = "FLOCK_LIKELY";
+  float dist = (rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)rssi) / 20.0f);
+  uint8_t conf = 100;
+
+  m5stickDisplayShowAlertRich(proto, name, mac, vendor, method, verdict, rssi, dist, conf, ch, alertMs);
 }
 
 bool m5stickDisplayInAlert(unsigned long now) {
@@ -518,10 +758,7 @@ void m5stickDisplayTick(unsigned long now, uint8_t ch, int detCount) {
       digitalWrite(M5_LED_PIN, HIGH);
       tft.fillScreen(TFT_BLACK);
     } else {
-      if (now - lastFrameTick >= 200) {
-        lastFrameTick = now;
-        drawAlertHUD(now);
-      }
+      drawAlertHUDDynamic(now);
       return;
     }
   }
