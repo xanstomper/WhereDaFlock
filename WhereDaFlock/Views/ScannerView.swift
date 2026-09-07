@@ -5,18 +5,21 @@ struct ScannerView: View {
     @EnvironmentObject var locationService: LocationService
     @StateObject private var visionService = VisionDetectionService()
     @StateObject private var bluetoothService = BluetoothService()
+    @ObservedObject private var rfBridge = RFSensorBridge.shared
     @State private var selectedMode: ScanMode = .vision
     @State private var isScanning: Bool = false
     
     enum ScanMode: String, CaseIterable {
         case vision = "Vision"
         case bluetooth = "Bluetooth"
+        case rf = "RF Spectrum"
         case environment = "Environment"
         
         var icon: String {
             switch self {
             case .vision: return "camera.viewfinder"
             case .bluetooth: return "antenna.radiowaves.left.and.right"
+            case .rf: return "waveform.path.ecg"
             case .environment: return "sensor.fill"
             }
         }
@@ -39,6 +42,8 @@ struct ScannerView: View {
                         VisionScannerView(visionService: visionService, isScanning: $isScanning)
                     case .bluetooth:
                         BluetoothScannerView(bluetoothService: bluetoothService, isScanning: $isScanning)
+                    case .rf:
+                        RFScannerView(rfBridge: rfBridge, isScanning: $isScanning)
                     case .environment:
                         EnvironmentScannerView(locationService: locationService)
                     }
@@ -64,6 +69,7 @@ struct ScannerView: View {
             switch selectedMode {
             case .vision: break
             case .bluetooth: bluetoothService.startScanning()
+            case .rf: break
             case .environment: break
             }
         } else {

@@ -56,12 +56,19 @@
    - [Architecture & Technology Stack](#architecture--technology-stack)
    - [Live Intelligence Map & Spatial Clustering](#live-intelligence-map--spatial-clustering)
    - [AI Navigation & Privacy-Scored Routing](#ai-navigation--privacy-scored-routing)
-   - [Multi-Modal Scanner Suite (Vision, BLE, Telemetry)](#multi-modal-scanner-suite-vision-ble-telemetry)
+   - [Multi-Modal Scanner Suite (Vision, BLE, RF Spectrum, Telemetry)](#multi-modal-scanner-suite-vision-ble-rf-spectrum-telemetry)
+   - [RF Frequency Hopping Sequence Burst Sensor (`RFSensorBridge.swift`)](#rf-frequency-hopping-sequence-burst-sensor-rfsensorbridgeswift)
+   - [Lock & Home Screen Widgets (`WhereDaFlockWidgets/`)](#lock--home-screen-widgets-wheredaflockwidgets)
+   - [Apple Watch Companion App (`WhereDaFlockWatch/`)](#apple-watch-companion-app-wheredaflockwatch)
    - [Zero-Knowledge Privacy Engine & Cryptography](#zero-knowledge-privacy-engine--cryptography)
    - [Community Reporting & Confidence Decay](#community-reporting--confidence-decay)
+   - [End-to-End iOS UI Test Suite (`WhereDaFlockUITests/`)](#end-to-end-ios-ui-test-suite-wheredaflockuitests)
 5. [Backend Infrastructure & Web Dashboard (`Backend/`, `api/`)](#5-backend-infrastructure--web-dashboard-backend-api)
 6. [Hardware Assembly & Firmware Flashing Guide](#6-hardware-assembly--firmware-flashing-guide)
-7. [iOS Build & CoreML Model Setup](#7-ios-build--coreml-model-setup)
+   - [Web Serial Browser Flasher (`tools/web_flasher.html`)](#web-serial-browser-flasher-toolsweb_flasherhtml)
+   - [Automated Firmware Binary Packaging (`tools/build_firmware_bins.sh`)](#automated-firmware-binary-packaging-toolsbuild_firmware_binssh)
+   - [Hardware Communication Protocol Specification (`docs/PROTOCOL.md`)](#hardware-communication-protocol-specification-docsprotocolmd)
+7. [iOS Multi-Target Build & CoreML Model Setup](#7-ios-multi-target-build--coreml-model-setup)
 8. [Empirical Datasets & IEEE OUI Database (`datasets/`)](#8-empirical-datasets--ieee-oui-database-datasets)
 9. [Ethical & Legal Disclosures](#9-ethical--legal-disclosures)
 
@@ -624,7 +631,7 @@ Where:
 
 ---
 
-### Multi-Modal Scanner Suite (Vision, BLE, Telemetry)
+### Multi-Modal Scanner Suite (Vision, BLE, RF Spectrum, Telemetry)
 
 The app features an integrated multi-sensor scanning dashboard (`ScannerView`):
 
@@ -637,6 +644,7 @@ The app features an integrated multi-sensor scanning dashboard (`ScannerView`):
 #### 2. Bluetooth Radar (`BluetoothService`)
 - Utilizes `CBCentralManager` in continuous scan mode (`scanForPeripherals(withServices: nil)`).
 - Classifies discovered BLE peripherals by advertising name, manufacturer data, and Service UUID prefixes:
+  - `0x09C8` $\to$ Flock Safety BLE beacon infrastructure
   - `AC233FA0...` $\to$ Apple AirTag tracking devices
   - `4C000000...` $\to$ iBeacon location transmitters
   - `F0000000...` $\to$ Vehicle telemetry / infotainment systems
@@ -654,6 +662,12 @@ The app features an integrated multi-sensor scanning dashboard (`ScannerView`):
   - $\|a\| \ge 3.0g$: Bumpy terrain / potholes.
   - $\|a\| > 4.0g$: Speed bumps or road hazards.
 - **Anomaly Detection:** Tracks rapid speed drops ($> 8\text{ m/s}$, approx $18\text{ mph}$) to flag sudden traffic standstills, police stops, or collisions.
+
+#### 4. RF Frequency Hopping Sequence Burst Sensor (`RFSensorBridge.swift`)
+- **Ascending Hop Sequence Detection:** Intercepts real-time 802.11 NDJSON telemetry streams over USB-CDC or BLE. Detects characteristic ALPR rapid ascending channel transitions:
+  $$\text{Ch } 1 \xrightarrow{\Delta t \le 350\text{ms}} \text{Ch } 6 \xrightarrow{\Delta t \le 350\text{ms}} \text{Ch } 11$$
+- **UI Integration:** Rendered inside `ScannerView` (mode `.rf`) and `DetectionDashboardView`, presenting live channel activity distributions (2412, 2437, 2462 MHz), RSSI signal levels, and instant haptic/audio proximity cues via `HapticManager` and `AudioCueManager`.
+- **Unit Tested:** Validated via `WhereDaFlockTests/RFSensorBridgeTests.swift` covering NDJSON parsing, ascending hop detection, noise rejection, and unique transmitter tracking.
 
 ---
 
@@ -711,6 +725,50 @@ enum ReportType: String, Codable, CaseIterable {
 
 - **Confidence Weighting:** Every report begins with a baseline confidence. User upvotes increment confidence by $+10\%$, while downvotes decrement it by $-15\%$.
 - **Temporal Half-Life:** Reports undergo linear confidence decay over a **24-hour expiration window**, after which stale markers are automatically purged from the map view.
+
+---
+
+### Lock & Home Screen Widgets (`WhereDaFlockWidgets/`)
+
+The native **WidgetKit** extension (`WhereDaFlockWidgets.swift`) provides glanceable surveillance awareness without opening the app:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                     WhereDaFlock Widget Suite                          │
+├───────────────────┬──────────────────────────┬─────────────────────────┤
+│    Lock Screen    │       System Small       │      System Medium      │
+│  Accessory Views  │     Home Screen Card     │     Panoramic Radar     │
+│ - Circular Gauge  │ - Dynamic Threat Level   │ - Nearby Camera Count   │
+│ - Inline Status   │ - Nearby Cameras Gauge   │ - Active RF Burst Feed  │
+│ - Rectangular Bar │ - Ghost Mode Indicator   │ - One-Tap Scanner Link  │
+└───────────────────┴──────────────────────────┴─────────────────────────┘
+```
+
+- **Family Support:** Supports `systemSmall`, `systemMedium`, `accessoryCircular`, `accessoryRectangular`, and `accessoryInline`.
+- **Deep Linking:** Tap interactions open the app directly to `wheredaflock://threat`, `wheredaflock://scan`, or `wheredaflock://map`.
+- **Info.plist Integration:** Configured with `com.apple.widgetkit-extension` and explicit bundle identifier `com.wheredaflock.app.widgets` in `project.yml`.
+
+---
+
+### Apple Watch Companion App (`WhereDaFlockWatch/`)
+
+The standalone watchOS application (`WhereDaFlockWatchApp.swift`, `WatchContentView.swift`) delivers silent, hands-free spatial counter-surveillance directly to your wrist:
+
+- **Wrist-Haptic Alerts:** Generates distinct haptic feedback patterns when entering surveillance geofence corridors or when the ESP32 captures an RF burst.
+- **Threat Meter Gauge:** Live circular gauge indexing localized surveillance density (Low / Moderate / High / Severe).
+- **Quick Ghost Mode Toggle:** Instantly toggle memory-only Ghost Mode directly from the watch crown interface.
+- **Independent watchOS 10+ Target:** Fully integrated in `project.yml` with bundle ID `com.wheredaflock.app.watchkitapp`.
+
+---
+
+### End-to-End iOS UI Test Suite (`WhereDaFlockUITests/`)
+
+Automated UI and workflow testing is implemented via Apple's **XCTest / XCUITest** framework in `WhereDaFlockUITests.swift`:
+
+- **Navigation Verification:** Validates bottom navigation tab transitions between Map, Scanner, Detection Dashboard, and Privacy Settings.
+- **Scanner Mode Switching:** Cycles through Vision, Bluetooth Radar, RF Spectrum, and Road Telemetry scanner modes.
+- **Ghost Mode Assertion:** Verifies that enabling Ghost Mode in Privacy Settings immediately updates UI badges and mutes telemetry logging.
+- **Launch Performance Metrics:** Asserts cold launch latency (`XCTApplicationLaunchMetric`) to ensure zero startup degradation.
 
 ---
 
@@ -868,35 +926,73 @@ arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32s3 firmware/WhereDaFl
 arduino-cli monitor -p /dev/ttyUSB0 --config baudrate=115200
 ```
 
+### Web Serial Browser Flasher (`tools/web_flasher.html`)
+
+For zero-install firmware deployment directly from a web browser (Google Chrome, Microsoft Edge, Brave, Chromium):
+
+1. Serve the repository over HTTP (or host via GitHub Pages):
+   ```bash
+   python3 -m http.server 8000
+   ```
+2. Navigate to `http://localhost:8000/tools/web_flasher.html`.
+3. Connect the ESP32-S3 via USB-C data cable.
+4. Click **Install WiFi Scanner**, **Install T-Dongle**, or **Install BLE Scanner**.
+5. Select your device port in the browser dialog; flashing completes automatically in ~30 seconds.
+
+### Automated Firmware Binary Packaging (`tools/build_firmware_bins.sh`)
+
+To compile, export, and verify all hardware binaries and SHA-256 manifests for WebSerial distribution:
+
+```bash
+# Build and package all targets (Seeed XIAO, LilyGO, BLE Scanner, Generic S3):
+./tools/build_firmware_bins.sh
+
+# Or build a single target:
+./tools/build_firmware_bins.sh xiao_esp32s3
+```
+
+This exports `bootloader.bin`, `partitions.bin`, and `firmware.bin` into `firmware/bin/<target>/` with verified checksums in `firmware/bin/checksums.txt`.
+
+### Hardware Communication Protocol Specification (`docs/PROTOCOL.md`)
+
+Full wire-level frame specifications, chunked notification framing, and JSON schemas are maintained in [`docs/PROTOCOL.md`](docs/PROTOCOL.md):
+- **BLE Service UUID:** `96F10C00-6DF1-4C00-8000-00805F9B34FB` (TX: `...0C01`, RX: `...0C02`).
+- **Telemetry Frame:** 20-byte MTU-safe chunking with continuation bytes and trailing newline delimiter.
+- **Flock Beacon Identification:** Validates 16-bit Company Identifier `0x09C8` (wire format `[0xC8, 0x09]`) and RSSI log-distance path loss.
+
 ---
 
-## 7. iOS Build & CoreML Model Setup
+## 7. iOS Multi-Target Build & CoreML Model Setup
 
 ### Prerequisites:
 - macOS Sonoma 14.0 or higher
 - Xcode 15.3 or higher
 - iOS 17.0+ deployment target device
+- watchOS 10.0+ for Apple Watch target
 - Apple Developer Account (for device deployment)
 
-### Build Instructions:
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/xanstomper/WhereDaFlock.git
-   cd WhereDaFlock
-   ```
-2. Open in Xcode using either method:
-   - **Swift Package Manager (Direct):** Open the root folder or `Package.swift` directly in Xcode (`File -> Open -> WhereDaFlock`).
-   - **XcodeGen (Generate `.xcodeproj`):**
-     ```bash
-     brew install xcodegen
-     xcodegen generate
-     open WhereDaFlock.xcodeproj
-     ```
-3. Select the `WhereDaFlock` target, navigate to **Signing & Capabilities**, and assign your **Development Team**.
-4. Run the automated unit test suite:
-   - In Xcode: Press `Cmd + U` to run all tests in `WhereDaFlockTests`.
+### Multi-Target Project Generation (`project.yml`):
+WhereDaFlock is structured with **XcodeGen** to build 5 unified targets from a single declarative specification:
+- **`WhereDaFlock`**: Main iOS 17+ navigation and detection app (`com.wheredaflock.app`).
+- **`WhereDaFlockWidgets`**: WidgetKit lock and home screen extension (`com.wheredaflock.app.widgets`).
+- **`WhereDaFlockWatch`**: Standalone watchOS 10+ wrist alert companion (`com.wheredaflock.app.watchkitapp`).
+- **`WhereDaFlockTests`**: Unit test suite for privacy, RF hop detection, routing, and database logic (`WhereDaFlockTests/`).
+- **`WhereDaFlockUITests`**: Automated UI testing for navigation flows, scanner modes, and Ghost Mode (`WhereDaFlockUITests/`).
+
+```bash
+# Generate complete Xcode project with all 5 targets:
+brew install xcodegen
+xcodegen generate
+open WhereDaFlock.xcodeproj
+```
+
+### Build & Run Instructions:
+1. Open `WhereDaFlock.xcodeproj` in Xcode.
+2. Select the `WhereDaFlock` target, navigate to **Signing & Capabilities**, and assign your **Development Team**.
+3. Run the automated test suite:
+   - In Xcode: Press `Cmd + U` to execute all unit tests in `WhereDaFlockTests` and UI tests in `WhereDaFlockUITests`.
    - On CLI: `swift test` (macOS).
-5. Attach an iOS 17+ device and press `Cmd + R` to compile and launch.
+4. Select your target device (iPhone or Apple Watch) and press `Cmd + R` to compile and launch.
 
 ### Automated YOLOv8 CoreML Model Export:
 The repository includes an automated export pipeline with on-device Non-Maximum Suppression (NMS):

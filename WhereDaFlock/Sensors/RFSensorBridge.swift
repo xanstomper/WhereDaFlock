@@ -102,7 +102,7 @@ public class RFSensorBridge: ObservableObject {
         }
     }
     
-    private func recordEvent(_ event: WDFDetectionEvent) {
+    public func recordEvent(_ event: WDFDetectionEvent) {
         recentDetections.insert(event, at: 0)
         if recentDetections.count > maxHistory {
             recentDetections.removeLast()
@@ -128,7 +128,7 @@ public class RFSensorBridge: ObservableObject {
         }
     }
     
-    private func detectAscendingHop(history: [(channel: Int, time: Date)]) -> Bool {
+    public func detectAscendingHop(history: [(channel: Int, time: Date)]) -> Bool {
         guard history.count >= 2 else { return false }
         for i in 0..<(history.count - 1) {
             let ch1 = history[i].channel
@@ -140,5 +140,13 @@ public class RFSensorBridge: ObservableObject {
             }
         }
         return false
+    }
+    
+    public func reset() {
+        recentDetections.removeAll()
+        macChannelHistory.removeAll()
+        isBurstDetected = false
+        lastBurstTime = nil
+        activeCameraCount = 0
     }
 }

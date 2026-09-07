@@ -5,6 +5,7 @@ struct DetectionDashboardView: View {
     @StateObject private var cameraService = CameraDatabaseService()
     @StateObject private var bluetoothService = BluetoothService()
     @StateObject private var reportService = ReportService()
+    @ObservedObject private var rfBridge = RFSensorBridge.shared
     
     var body: some View {
         NavigationStack {
@@ -13,6 +14,50 @@ struct DetectionDashboardView: View {
                     RiskLevelCard(cameras: nearbyCameras.count,
                                  reports: nearbyReports.count,
                                  riskLevel: calculateRiskLevel())
+                    
+                    GroupBox {
+                        if rfBridge.recentDetections.isEmpty {
+                            HStack {
+                                Text("No RF bursts detected").foregroundColor(.secondary)
+                                Spacer()
+                                Image(systemName: "waveform.path.ecg").foregroundColor(.secondary)
+                            }.padding()
+                        } else {
+                            VStack(spacing: 8) {
+                                if rfBridge.isBurstDetected {
+                                    HStack {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundColor(.red)
+                                        Text("ALPR Burst: Ascending Hop 1→6→11 (< 350ms)")
+                                            .font(.caption.bold())
+                                            .foregroundColor(.red)
+                                        Spacer()
+                                    }
+                                    .padding(8)
+                                    .background(Color.red.opacity(0.12))
+                                    .cornerRadius(8)
+                                }
+                                ForEach(rfBridge.recentDetections.prefix(3)) { item in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(item.macAddress)
+                                                .font(.caption.monospaced().weight(.semibold))
+                                            Text("Ch \(item.channel) (\(item.frequency) MHz) • \(item.detectionMethod)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Text("\(item.rssi) dBm")
+                                            .font(.caption.monospaced())
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("RF Spectrum (2.4 GHz)", systemImage: "waveform.path.ecg").foregroundColor(.purple)
+                    }
                     
                     GroupBox {
                         if nearbyCameras.isEmpty {
@@ -84,6 +129,7 @@ struct DetectionDashboardView: View {
     private func calculateRiskLevel() -> Double {
         let cameraRisk = min(Double(nearbyCameras.count) * 0.15, 0.6)
         let reportRisk = min(Double(nearbyReports.count) * 0.1, 0.3)
-        return min(cameraRisk + reportRisk, 1.0)
+        let rfRisk = rfBridge.isBurstDetected ? 0.3 : (rfBridge.activeCameraCount > 0 ? 0.15 : 0.0)
+        return min(cameraRisk + reportRisk + rfRisk, 1.0)
     }
 }
