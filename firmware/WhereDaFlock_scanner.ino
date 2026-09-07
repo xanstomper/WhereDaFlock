@@ -29,12 +29,16 @@
 #include <esp_wifi.h>
 #include "src/signatures.h"
 #include "src/session.h"
+#include "src/display_dongle.h"
 
 using namespace WhereDaFlock;
 
 // ---------------------------------------------------------------------------
 // CONFIG
 // ---------------------------------------------------------------------------
+#ifndef USE_BUZZER
+#define USE_BUZZER        1
+#endif
 #ifndef BUZZER_PIN
 #define BUZZER_PIN        3
 #endif
@@ -202,6 +206,20 @@ static void heartbeatBeep() {
   tone(BUZZER_PIN, HB_BEEP_HZ); delay(HB_NOTE_MS); noTone(BUZZER_PIN);
   delay(HB_GAP_MS);
   tone(BUZZER_PIN, HB_BEEP_HZ); delay(HB_NOTE_MS); noTone(BUZZER_PIN);
+}
+
+static void startupBeep() {
+#if USE_BUZZER
+  // First 6 notes of SMB World 1-2 (underground). Koji Kondo's descending
+  // pattern: C4, C5, A3, A4, B♭3, B♭4 (alternating-octave pairs).
+  static const uint16_t notes[6] = { 262, 523, 220, 440, 233, 466 };
+  for (int i = 0; i < 6; i++) {
+    tone(BUZZER_PIN, notes[i]);
+    delay((i == 5) ? 160 : 95);
+    noTone(BUZZER_PIN);
+    if (i < 5) delay(22);
+  }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +429,7 @@ static void drainAlertQueue() {
       emitDetectionJSON(mac, method, e->tier, e->rssi, e->channel);
       tierChirp(e->tier);
       ledSet(true); ledOffAt = millis() + LED_FLASH_MS;
+      dongleDisplayShowAlert(method, mac, e->rssi, e->channel, ALERT_COOLDOWN_MS);
     }
   }
 }
@@ -421,6 +440,7 @@ static void updateChannelMode() {
     currentChannel = SINGLE_CHANNEL;
     esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   }
+  dongleDisplayShowIdle(currentChannel, wdfDetCount);
   return;
 #else
   if (millis() - lastHop < CHANNEL_DWELL_MS) return;
@@ -428,6 +448,7 @@ static void updateChannelMode() {
   currentChannel = activeChannels[chanIdx];
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   lastHop = millis();
+  dongleDisplayShowIdle(currentChannel, wdfDetCount);
 #endif
 }
 
@@ -514,6 +535,9 @@ void setup() {
   Serial.println("RECEIVE-ONLY promiscuous mode. No transmissions.");
   Serial.printf("Targeting %u Flock OUIs (%s)\n", (unsigned)OUI_COUNT, __DATE__);
 
+  startupBeep();
+  dongleDisplayInit();
+
   // Session + control plane (SPIFFS persistence, NVS beep mask, boot recovery).
   WhereDaFlockSession::loadBeepMask();
   if (SPIFFS.begin(true)) WhereDaFlockSession::promotePrevSession();
@@ -550,6 +574,7 @@ void loop() {
   drainAlertQueue();
   updateChannelMode();
   heartbeatTick();
+  dongleDisplayTick(millis(), currentChannel, wdfDetCount);
   handleHostCommands();          // dashboard control plane (USB CDC)
   ledTick();
   delay(1);

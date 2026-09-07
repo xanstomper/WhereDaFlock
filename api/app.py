@@ -46,6 +46,51 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 DETECTIONS = []            # all-time (session) detections, newest last
 LOCK = threading.Lock()
 IS_FILENAME_PREFIX = "wdf"
+OUI_DATABASE = {}
+
+def load_oui_database():
+    """Load the IEEE OUI database from oui.txt for MAC manufacturer resolution."""
+    global OUI_DATABASE
+    candidate_paths = [
+        os.path.join(os.path.dirname(__file__), "oui.txt"),
+        os.path.join(os.path.dirname(__file__), "..", "datasets", "oui.txt"),
+        os.path.join(os.path.dirname(__file__), "datasets", "oui.txt"),
+    ]
+    for path in candidate_paths:
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "(hex)" in line:
+                            parts = line.split("(hex)")
+                            if len(parts) == 2:
+                                prefix = parts[0].strip().replace("-", "").replace(" ", "").replace(":", "").upper()
+                                mfr = parts[1].strip()
+                                if len(prefix) == 6:
+                                    OUI_DATABASE[prefix] = mfr
+                print(f"[wdf-dash] Loaded {len(OUI_DATABASE)} IEEE OUI entries from {path}")
+                return
+            except Exception as exc:
+                print(f"[wdf-dash] Failed to load {path}: {exc}")
+
+def lookup_manufacturer(mac: str) -> str:
+    if not mac:
+        return ""
+    clean = mac.replace(":", "").replace("-", "").upper()
+    if len(clean) >= 6:
+        return OUI_DATABASE.get(clean[:6], "")
+    return ""
+
+load_oui_database()
+
+# Register BLE side companion blueprint from flockyou_ble if present
+try:
+    from flockyou_ble import bp as flock_ble_bp, init_bridge as flock_ble_init_bridge
+    app.register_blueprint(flock_ble_bp)
+    print("[wdf-dash] Registered BLE bridge blueprint")
+except Exception as exc:
+    print(f"[wdf-dash] BLE blueprint notice: {exc}")
 
 # ---------------------------------------------------------------------------
 # Detection ingest
@@ -53,6 +98,8 @@ IS_FILENAME_PREFIX = "wdf"
 def _ingest(data: dict) -> dict:
     """Normalize a raw detection dict into the dashboard record."""
     now = datetime.now(timezone.utc)
+    mac = data.get("mac") or data.get("mac_address") or "?"
+    mfr = data.get("manufacturer") or lookup_manufacturer(mac)
     record = {
         "ts": data.get("ts") or now.isoformat(),
         "mac": data.get("mac") or data.get("mac_address") or "?",
@@ -70,6 +117,7 @@ def _ingest(data: dict) -> dict:
         "lat": data.get("lat") or data.get("gps", {}).get("latitude"),
         "lon": data.get("lon") or data.get("gps", {}).get("longitude"),
         "source": data.get("source") or "unknown",
+        "manufacturer": mfr,
     }
     with LOCK:
         DETECTIONS.append(record)
@@ -78,6 +126,15 @@ def _ingest(data: dict) -> dict:
             del DETECTIONS[: len(DETECTIONS) - cap]
     socketio.emit("detection", record)
     return record
+
+
+@app.get("/api/oui/<mac_prefix>")
+def api_oui_lookup(mac_prefix: str):
+    clean = mac_prefix.replace(":", "").replace("-", "").upper()
+    mfr = OUI_DATABASE.get(clean[:6])
+    if mfr:
+        return jsonify({"prefix": clean[:6], "manufacturer": mfr})
+    return jsonify({"prefix": clean[:6], "manufacturer": None}), 404
 
 
 @app.post("/api/detections")
