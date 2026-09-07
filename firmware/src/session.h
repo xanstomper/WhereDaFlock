@@ -31,9 +31,15 @@ using namespace WhereDaFlock;
 
 typedef struct {
   char     mac[18];
+  char     name[32];
+  char     protocol[10];
+  char     vendor[32];
   char     method[24];
+  char     verdict[24];
   uint8_t  tier;
   int8_t   rssi;
+  float    distM;
+  uint8_t  confidence;
   uint8_t  channel;
   uint32_t firstSeen;
   uint32_t lastSeen;
@@ -44,6 +50,10 @@ typedef struct {
 extern WDFDetection wdfDet[WDF_MAX_DETECTIONS];
 extern int          wdfDetCount;
 extern volatile uint8_t wdfBeepMask;   // bit N = tier N audible
+
+int wdfAddBleDetection(const char* mac, const char* name, const char* vendor,
+                       const char* method, const char* verdict, int8_t rssi,
+                       float distM, uint8_t conf, bool* outChirpWorthy);
 
 namespace WhereDaFlockSession {
 

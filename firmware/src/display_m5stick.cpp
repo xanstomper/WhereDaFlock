@@ -38,7 +38,17 @@ static unsigned long alertUntilMs = 0;
 static uint8_t idleCh = 1;
 static int idleDetCount = 0;
 static bool inAlert = false;
-static uint8_t displayMode = 0; // 0:Bird 1:Radar 2:Spectrum 3:Info 4:Stealth
+static uint8_t displayMode = 0; // 0:Bird 1:Radar 2:Spectrum 3:Info 4:Captures 5:Stealth
+#define NUM_DISPLAY_MODES 6
+
+enum CapturesSubView {
+  CAPTURES_VIEW_LIST,
+  CAPTURES_VIEW_DETAIL
+};
+static CapturesSubView capturesView = CAPTURES_VIEW_LIST;
+static int selectedCaptureIdx = 0;
+static int captureScrollOffset = 0;
+static bool capturesNeedRedraw = true;
 static unsigned long lastFrameTick = 0;
 static float radarAngleDeg = 0.0f;
 static float cachedBattVoltage = 4.10f;
@@ -458,9 +468,11 @@ bool m5stickDisplayInAlert(unsigned long now) {
 }
 
 void m5stickCycleDisplayMode() {
-  displayMode = (displayMode + 1) % 5;
+  displayMode = (displayMode + 1) % NUM_DISPLAY_MODES;
   tft.fillScreen(TFT_BLACK);
-  if (displayMode == 4) {
+  capturesView = CAPTURES_VIEW_LIST;
+  capturesNeedRedraw = true;
+  if (displayMode == 5) {
     setBacklight(false); // Stealth Mode
   } else {
     setBacklight(true);
@@ -718,26 +730,367 @@ static void drawInfoHUD(unsigned long now, uint8_t ch, int detCount) {
   }
 }
 
+// --- Mode 4: Captures Tab (List & Detail Inspector) ---
+static void drawCapturesList(unsigned long now) {
+  static unsigned long lastListTick = 0;
+  if (now - lastListTick >= 1000) {
+    lastListTick = now;
+    capturesNeedRedraw = true;
+  }
+
+  if (!capturesNeedRedraw) return;
+  capturesNeedRedraw = false;
+
+  tft.fillScreen(TFT_BLACK);
+
+  // Top Header Bar
+  tft.fillRect(0, 0, TFT_WIDTH_PX, 19, HW_DKRED);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_WHITE, HW_DKRED);
+  tft.drawString("CAPTURES LOG", 6, 9, 2);
+
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(HW_YELLOW, HW_DKRED);
+  char countBuf[24];
+  snprintf(countBuf, sizeof(countBuf), "TOTAL: %d", wdfDetCount);
+  tft.drawString(countBuf, TFT_WIDTH_PX - 6, 9, 2);
+
+  if (wdfDetCount == 0) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(HW_RED, TFT_BLACK);
+    tft.drawString("NO CAPTURES RECORDED", TFT_WIDTH_PX / 2, 52, 2);
+    tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+    tft.drawString("Monitoring 2.4GHz WiFi & BLE...", TFT_WIDTH_PX / 2, 75, 1);
+    tft.drawString("Flock cameras will appear here.", TFT_WIDTH_PX / 2, 90, 1);
+
+    tft.fillRect(0, 116, TFT_WIDTH_PX, 19, HW_DKRED);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, HW_DKRED);
+    tft.drawString("[A] NEXT TAB", TFT_WIDTH_PX / 2, 125, 1);
+    return;
+  }
+
+  int totalItems = wdfDetCount + 1;
+  if (selectedCaptureIdx >= totalItems) selectedCaptureIdx = totalItems - 1;
+  if (selectedCaptureIdx < 0) selectedCaptureIdx = 0;
+
+  if (selectedCaptureIdx < captureScrollOffset) {
+    captureScrollOffset = selectedCaptureIdx;
+  }
+  if (selectedCaptureIdx >= captureScrollOffset + 3) {
+    captureScrollOffset = selectedCaptureIdx - 2;
+  }
+  if (captureScrollOffset < 0) captureScrollOffset = 0;
+
+  for (int slot = 0; slot < 3; slot++) {
+    int itemIdx = captureScrollOffset + slot;
+    if (itemIdx >= totalItems) break;
+
+    int itemY = 22 + slot * 31;
+    bool isSel = (itemIdx == selectedCaptureIdx);
+
+    if (itemIdx < wdfDetCount) {
+      WDFDetection& det = wdfDet[itemIdx];
+
+      if (isSel) {
+        tft.fillRect(2, itemY, 236, 29, HW_DKRED);
+        tft.drawRect(2, itemY, 236, 29, HW_RED);
+        tft.drawRect(3, itemY + 1, 234, 27, HW_RED);
+      } else {
+        tft.fillRect(2, itemY, 236, 29, TFT_BLACK);
+        tft.drawRect(2, itemY, 236, 29, HW_DKRED);
+      }
+
+      tft.setTextDatum(TL_DATUM);
+      uint16_t nameColor = isSel ? HW_YELLOW : TFT_WHITE;
+      tft.setTextColor(nameColor, isSel ? HW_DKRED : TFT_BLACK);
+      char titleBuf[48];
+      snprintf(titleBuf, sizeof(titleBuf), "%s#%d [%s] %s", isSel ? "> " : "  ", itemIdx + 1, det.protocol, det.name);
+      tft.drawString(titleBuf, 6, itemY + 3, 1);
+
+      tft.setTextDatum(TR_DATUM);
+      tft.setTextColor(isSel ? TFT_WHITE : HW_RED, isSel ? HW_DKRED : TFT_BLACK);
+      char rssiBuf[16];
+      snprintf(rssiBuf, sizeof(rssiBuf), "%d dBm", det.rssi);
+      tft.drawString(rssiBuf, 232, itemY + 3, 1);
+
+      tft.setTextDatum(TL_DATUM);
+      tft.setTextColor(HW_CYAN, isSel ? HW_DKRED : TFT_BLACK);
+      char macBuf[24];
+      snprintf(macBuf, sizeof(macBuf), "   %s", det.mac);
+      tft.drawString(macBuf, 6, itemY + 16, 1);
+
+      tft.setTextDatum(TR_DATUM);
+      tft.setTextColor(HW_DARKGREY, isSel ? HW_DKRED : TFT_BLACK);
+      unsigned long secsAgo = (now >= det.lastSeen) ? (now - det.lastSeen) / 1000 : 0;
+      char statBuf[32];
+      if (secsAgo < 60) snprintf(statBuf, sizeof(statBuf), "%u hits | %lus ago", det.count, secsAgo);
+      else snprintf(statBuf, sizeof(statBuf), "%u hits | %lum ago", det.count, secsAgo / 60);
+      tft.drawString(statBuf, 232, itemY + 16, 1);
+
+    } else {
+      if (isSel) {
+        tft.fillRect(2, itemY, 236, 29, HW_DKRED);
+        tft.drawRect(2, itemY, 236, 29, HW_YELLOW);
+        tft.setTextColor(HW_YELLOW, HW_DKRED);
+      } else {
+        tft.fillRect(2, itemY, 236, 29, TFT_BLACK);
+        tft.drawRect(2, itemY, 236, 29, HW_DKRED);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      }
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString(">> [ NEXT TAB: STEALTH ] >>", TFT_WIDTH_PX / 2, itemY + 14, 2);
+    }
+  }
+
+  tft.fillRect(0, 116, TFT_WIDTH_PX, 19, HW_DKRED);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_WHITE, HW_DKRED);
+  tft.drawString("[B] SCROLL", 6, 125, 1);
+
+  tft.setTextDatum(MC_DATUM);
+  if (selectedCaptureIdx < wdfDetCount) {
+    tft.drawString("[A] VIEW DETAILS", 120, 125, 1);
+  } else {
+    tft.drawString("[A] NEXT TAB", 120, 125, 1);
+  }
+
+  tft.setTextDatum(MR_DATUM);
+  char posBuf[16];
+  snprintf(posBuf, sizeof(posBuf), "%d/%d", selectedCaptureIdx + 1, totalItems);
+  tft.drawString(posBuf, 234, 125, 1);
+}
+
+static void drawCaptureDetail(unsigned long now) {
+  if (!capturesNeedRedraw) return;
+  capturesNeedRedraw = false;
+
+  if (selectedCaptureIdx >= wdfDetCount || wdfDetCount == 0) {
+    capturesView = CAPTURES_VIEW_LIST;
+    capturesNeedRedraw = true;
+    return;
+  }
+
+  WDFDetection& det = wdfDet[selectedCaptureIdx];
+  tft.fillScreen(TFT_BLACK);
+
+  // 1. Header Banner (Y=0..19)
+  tft.fillRect(0, 0, TFT_WIDTH_PX, 19, HW_RED);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_WHITE, HW_RED);
+  char titleBuf[32];
+  snprintf(titleBuf, sizeof(titleBuf), "[!] CAPTURE #%d: FLOCK", selectedCaptureIdx + 1);
+  tft.drawString(titleBuf, 6, 9, 2);
+
+  tft.setTextDatum(MR_DATUM);
+  char badgeBuf[24];
+  snprintf(badgeBuf, sizeof(badgeBuf), "[%s] %u%%", det.protocol, det.confidence);
+  tft.drawString(badgeBuf, TFT_WIDTH_PX - 6, 9, 2);
+
+  // 2. Identity Card (Y=21..65, H=44)
+  tft.drawRect(2, 21, 236, 44, HW_DKRED);
+  tft.drawRect(3, 22, 234, 42, HW_DKRED);
+
+  // Row 1 (Y=24): Device Name
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  tft.drawString("NAME:", 6, 24, 1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(det.name, 42, 24, 2);
+
+  // Row 2 (Y=40): MAC address (Font 2) + Channel
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+  tft.drawString("MAC: ", 6, 40, 2);
+  tft.setTextColor(HW_CYAN, TFT_BLACK);
+  tft.drawString(det.mac, 42, 40, 2);
+
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  if (det.channel > 0) {
+    char chBuf[16];
+    snprintf(chBuf, sizeof(chBuf), "CH %u", det.channel);
+    tft.drawString(chBuf, 232, 40, 2);
+  } else {
+    tft.drawString("BLE-ADV", 232, 40, 2);
+  }
+
+  // Row 3 (Y=54): Vendor & Trigger Method
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+  tft.drawString("MFR: ", 6, 54, 1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(det.vendor, 34, 54, 1);
+
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+  char metBuf[32];
+  snprintf(metBuf, sizeof(metBuf), "MET: %s", det.method);
+  tft.drawString(metBuf, 232, 54, 1);
+
+  // 3. Telemetry & Proximity Card (Y=67..113, H=46)
+  tft.drawRect(2, 67, 236, 46, HW_DKRED);
+  tft.drawRect(3, 68, 234, 44, HW_DKRED);
+
+  // Row 1 (Y=70): RSSI, Distance, Proximity level
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  tft.drawString("RSSI:", 6, 70, 1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  char rssiBuf[16];
+  snprintf(rssiBuf, sizeof(rssiBuf), "%d dBm  ", det.rssi);
+  tft.drawString(rssiBuf, 38, 70, 1);
+
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  tft.drawString("DIST:", 88, 70, 1);
+  char distBuf[16];
+  if (det.distM < 0) snprintf(distBuf, sizeof(distBuf), "? m");
+  else if (det.distM < 1.0f) snprintf(distBuf, sizeof(distBuf), "%.2fm", det.distM);
+  else snprintf(distBuf, sizeof(distBuf), "%.1fm", det.distM);
+  tft.drawString(distBuf, 120, 70, 1);
+
+  tft.setTextDatum(TR_DATUM);
+  if (det.distM >= 0 && det.distM < 1.5f) {
+    tft.setTextColor(HW_RED, TFT_BLACK);
+    tft.drawString("[IMMEDIATE]", 232, 70, 1);
+  } else if (det.distM >= 0 && det.distM < 4.0f) {
+    tft.setTextColor(HW_ORANGE, TFT_BLACK);
+    tft.drawString("[VERY CLOSE]", 232, 70, 1);
+  } else if (det.distM >= 0 && det.distM < 10.0f) {
+    tft.setTextColor(HW_YELLOW, TFT_BLACK);
+    tft.drawString("[NEARBY]", 232, 70, 1);
+  } else {
+    tft.setTextColor(HW_GREEN, TFT_BLACK);
+    tft.drawString("[IN RANGE]", 232, 70, 1);
+  }
+
+  // Row 2 (Y=82): 16-Segment Tactical Signal Bar
+  int barX = 6, barY = 82, segW = 9, segH = 8, segGap = 2;
+  int activeSegs = map(constrain((int)det.rssi, -95, -35), -95, -35, 0, 16);
+  for (int i = 0; i < 16; i++) {
+    int sx = barX + i * (segW + segGap);
+    if (i < activeSegs) {
+      uint16_t segColor = (i < 5) ? HW_GREEN : ((i < 11) ? HW_YELLOW : HW_RED);
+      tft.fillRect(sx, barY, segW, segH, segColor);
+    } else {
+      tft.fillRect(sx, barY, segW, segH, TFT_BLACK);
+      tft.drawRect(sx, barY, segW, segH, HW_DKRED);
+    }
+  }
+  int sigPct = map(constrain((int)det.rssi, -95, -35), -95, -35, 0, 100);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  char pctBuf[12];
+  snprintf(pctBuf, sizeof(pctBuf), "%3d%%", sigPct);
+  tft.drawString(pctBuf, 232, 82, 1);
+
+  // Row 3 (Y=100): Verdict & Hits & Timestamp
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_RED, TFT_BLACK);
+  tft.drawString(det.verdict, 6, 100, 1);
+
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  unsigned long secsAgo = (now >= det.lastSeen) ? (now - det.lastSeen) / 1000 : 0;
+  char statBuf[32];
+  if (secsAgo < 60) snprintf(statBuf, sizeof(statBuf), "HITS:%u  SEEN:%lus", det.count, secsAgo);
+  else snprintf(statBuf, sizeof(statBuf), "HITS:%u  SEEN:%lum", det.count, secsAgo / 60);
+  tft.drawString(statBuf, 232, 100, 1);
+
+  // 4. Footer Bar (Y=115..134, H=20)
+  tft.fillRect(0, 115, TFT_WIDTH_PX, 20, HW_DKRED);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_WHITE, HW_DKRED);
+  tft.drawString("[A] BACK TO LIST", 6, 124, 1);
+
+  tft.setTextDatum(MR_DATUM);
+  char nextBuf[32];
+  snprintf(nextBuf, sizeof(nextBuf), "[B] NEXT (%d/%d)", selectedCaptureIdx + 1, wdfDetCount);
+  tft.drawString(nextBuf, 234, 124, 1);
+}
+
+static void drawCapturesTab(unsigned long now) {
+  if (capturesView == CAPTURES_VIEW_LIST) {
+    drawCapturesList(now);
+  } else {
+    drawCaptureDetail(now);
+  }
+}
+
 // --- Main Tick ---
 void m5stickDisplayTick(unsigned long now, uint8_t ch, int detCount) {
   static bool lastBtnA = HIGH;
   static bool lastBtnB = HIGH;
+  static unsigned long btnAPressedAt = 0;
   bool btnA = digitalRead(M5_BUTTON_A_PIN);
   bool btnB = digitalRead(M5_BUTTON_B_PIN);
 
+  // Button A (Front M5 Button)
   if (lastBtnA == HIGH && btnA == LOW) {
+    btnAPressedAt = now;
+  }
+  if (lastBtnA == LOW && btnA == HIGH) {
+    unsigned long duration = now - btnAPressedAt;
     if (inAlert) {
       inAlert = false;
       alertUntilMs = 0;
       digitalWrite(M5_LED_PIN, HIGH);
       tft.fillScreen(TFT_BLACK);
-    } else {
+    } else if (duration >= 450) {
+      // Long press: advance to next tab
       m5stickCycleDisplayMode();
+    } else {
+      // Short click:
+      if (displayMode == 4) { // Captures Tab
+        if (capturesView == CAPTURES_VIEW_DETAIL) {
+          // In detail view: return to list
+          capturesView = CAPTURES_VIEW_LIST;
+          capturesNeedRedraw = true;
+          tone(M5_BUZZER_PIN, 1800, 30);
+        } else {
+          // In list view:
+          int totalItems = (wdfDetCount > 0) ? (wdfDetCount + 1) : 0;
+          if (totalItems == 0 || selectedCaptureIdx >= wdfDetCount) {
+            // No captures or [NEXT TAB] selected -> advance to next tab
+            m5stickCycleDisplayMode();
+          } else {
+            // Open full tactical detail view for selected capture!
+            capturesView = CAPTURES_VIEW_DETAIL;
+            capturesNeedRedraw = true;
+            tone(M5_BUZZER_PIN, 2400, 40);
+          }
+        }
+      } else {
+        // Normal modes: cycle to next tab
+        m5stickCycleDisplayMode();
+      }
     }
   }
+
+  // Button B (Side Button)
   if (lastBtnB == HIGH && btnB == LOW) {
-    m5stickToggleMute();
-    tone(M5_BUZZER_PIN, 1800, 60);
+    if (displayMode == 4) { // Captures Tab
+      if (capturesView == CAPTURES_VIEW_DETAIL) {
+        // In detail view: flip to NEXT capture's detailed HUD!
+        if (wdfDetCount > 0) {
+          selectedCaptureIdx = (selectedCaptureIdx + 1) % wdfDetCount;
+          capturesNeedRedraw = true;
+          tone(M5_BUZZER_PIN, 2000, 25);
+        }
+      } else {
+        // In list view: scroll down to next item!
+        int totalItems = (wdfDetCount > 0) ? (wdfDetCount + 1) : 0;
+        if (totalItems > 0) {
+          selectedCaptureIdx = (selectedCaptureIdx + 1) % totalItems;
+          capturesNeedRedraw = true;
+          tone(M5_BUZZER_PIN, 1800, 20);
+        }
+      }
+    } else {
+      // Normal modes: toggle mute
+      m5stickToggleMute();
+      tone(M5_BUZZER_PIN, 1800, 60);
+    }
   }
   lastBtnA = btnA;
   lastBtnB = btnB;
@@ -763,13 +1116,14 @@ void m5stickDisplayTick(unsigned long now, uint8_t ch, int detCount) {
     }
   }
 
-  if (displayMode == 4) return; // Stealth
+  if (displayMode == 5) return; // Stealth
 
   switch (displayMode) {
     case 0: drawBirdTUI(now, ch, detCount); break;
     case 1: drawRadarHUD(now, ch, detCount); break;
     case 2: drawSpectrumHUD(now, ch, detCount); break;
     case 3: drawInfoHUD(now, ch, detCount); break;
+    case 4: drawCapturesTab(now); break;
   }
 }
 #endif // USE_M5STICKC_PLUS_DISPLAY

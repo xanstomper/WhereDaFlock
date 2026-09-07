@@ -266,8 +266,12 @@ inline void checkAlerts() {
     uint16_t hits = alertMailbox.hits;
     alertMailbox.pending = false;
 
+    bool chirpWorthy = false;
+    wdfAddBleDetection(alertMailbox.mac, alertMailbox.name, alertMailbox.vendor,
+                       alertMailbox.method, alertMailbox.verdict,
+                       rssi, dist, alertMailbox.confidence, &chirpWorthy);
+
     if (isNew) {
-      ::wdfDetCount++;
       ::tierChirp(4);
 #ifdef USE_M5STICKC_PLUS_DISPLAY
       m5stickDisplayShowAlertRich(alertMailbox.protocol, alertMailbox.name,

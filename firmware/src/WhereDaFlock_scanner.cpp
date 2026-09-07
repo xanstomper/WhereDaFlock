@@ -368,7 +368,7 @@ static bool shouldSuppressDuplicate(const char* macStr, uint8_t tier) {
 }
 
 static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
-                          int8_t rssi, uint8_t ch, bool* outChirpWorthy) {
+                          int8_t rssi, uint8_t ch, const char* ssid, bool* outChirpWorthy) {
   uint32_t now = millis();
   for (int i = 0; i < wdfDetCount; i++) {
     if (strcmp(wdfDet[i].mac, mac) == 0) {
@@ -377,6 +377,7 @@ static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
       wdfDet[i].lastSeen = now;
       wdfDet[i].rssi = rssi;
       wdfDet[i].channel = ch;
+      wdfDet[i].distM = (rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)rssi) / 20.0f);
       bool upgrade = tier > wdfDet[i].tier;
       if (upgrade) {
         wdfDet[i].tier = tier;
@@ -389,9 +390,63 @@ static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
   if (wdfDetCount >= MAX_DETECTIONS) { if (outChirpWorthy) *outChirpWorthy = false; return -1; }
   WDFDetection& d = wdfDet[wdfDetCount];
   strlcpy(d.mac, mac, sizeof(d.mac));
-  strlcpy(d.method, method ? method : "", sizeof(d.method));
-  d.tier = tier; d.rssi = rssi; d.channel = ch;
-  d.firstSeen = d.lastSeen = now; d.count = 1; d.ssid[0] = '\0';
+  strlcpy(d.name, (ssid && strlen(ssid) > 0) ? ssid : "Flock Falcon ALPR", sizeof(d.name));
+  strlcpy(d.protocol, "WiFi", sizeof(d.protocol));
+  strlcpy(d.vendor, "Flock Safety (OUI)", sizeof(d.vendor));
+  const char* methodFull = (tier >= 4) ? "IE_FINGERPRINT" : ((tier >= 3) ? "WILDCARD_PROBE" : "OUI_ADDR2");
+  strlcpy(d.method, methodFull, sizeof(d.method));
+  strlcpy(d.verdict, (tier >= 3) ? "FLOCK_CONFIRMED" : "FLOCK_SUSPECT", sizeof(d.verdict));
+  d.tier = tier;
+  d.rssi = rssi;
+  d.distM = (rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)rssi) / 20.0f);
+  d.confidence = (tier >= 4) ? 100 : ((tier >= 3) ? 85 : ((tier >= 2) ? 65 : 40));
+  d.channel = ch;
+  d.firstSeen = d.lastSeen = now;
+  d.count = 1;
+  d.ssid[0] = '\0';
+  wdfDetCount++;
+  if (outChirpWorthy) *outChirpWorthy = true;
+  return wdfDetCount - 1;
+}
+
+int wdfAddBleDetection(const char* mac, const char* name, const char* vendor,
+                       const char* method, const char* verdict, int8_t rssi,
+                       float distM, uint8_t conf, bool* outChirpWorthy) {
+  uint32_t now = millis();
+  for (int i = 0; i < wdfDetCount; i++) {
+    if (strcmp(wdfDet[i].mac, mac) == 0) {
+      bool rediscover = (now - wdfDet[i].lastSeen) > REDISCOVER_MS;
+      if (wdfDet[i].count < 0xFFFF) wdfDet[i].count++;
+      wdfDet[i].lastSeen = now;
+      wdfDet[i].rssi = rssi;
+      wdfDet[i].distM = distM;
+      if (conf > wdfDet[i].confidence) wdfDet[i].confidence = conf;
+      if (name && strlen(name) > 0 && (strlen(wdfDet[i].name) == 0 || strcmp(wdfDet[i].name, "?") == 0)) {
+        strlcpy(wdfDet[i].name, name, sizeof(wdfDet[i].name));
+      }
+      if (outChirpWorthy) *outChirpWorthy = rediscover;
+      return i;
+    }
+  }
+  if (wdfDetCount >= MAX_DETECTIONS) {
+    if (outChirpWorthy) *outChirpWorthy = false;
+    return -1;
+  }
+  WDFDetection& d = wdfDet[wdfDetCount];
+  strlcpy(d.mac, mac, sizeof(d.mac));
+  strlcpy(d.name, (name && strlen(name) > 0) ? name : "FS Ext Battery", sizeof(d.name));
+  strlcpy(d.protocol, "BLE", sizeof(d.protocol));
+  strlcpy(d.vendor, (vendor && strlen(vendor) > 0) ? vendor : "Flock Safety (0x09C8)", sizeof(d.vendor));
+  strlcpy(d.method, method ? method : "mfr_id", sizeof(d.method));
+  strlcpy(d.verdict, verdict ? verdict : "FLOCK_LIKELY", sizeof(d.verdict));
+  d.tier = 4;
+  d.rssi = rssi;
+  d.distM = distM;
+  d.confidence = conf;
+  d.channel = 0;
+  d.firstSeen = d.lastSeen = now;
+  d.count = 1;
+  d.ssid[0] = '\0';
   wdfDetCount++;
   if (outChirpWorthy) *outChirpWorthy = true;
   return wdfDetCount - 1;
@@ -426,7 +481,7 @@ static void drainAlertQueue() {
     const char* method = tierToMethodLetter(e->tier);
 
     bool chirpWorthy = false;
-    int idx = fyAddDetection(mac, method, e->tier, e->rssi, e->channel, &chirpWorthy);
+    int idx = fyAddDetection(mac, method, e->tier, e->rssi, e->channel, (const char*)e->ssid, &chirpWorthy);
     if (idx < 0) continue;
     if (chirpWorthy) {
       fyLastTargetSeen = millis();
