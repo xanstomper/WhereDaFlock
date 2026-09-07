@@ -53,26 +53,33 @@ def parse_80211_header(payload):
 
 
 def parse_elements(body, table):
-    """Walk Information Elements (TLV: tag, len, value) and annotate known tags."""
+    """Walk Information Elements (TLV: tag, len, value) and annotate known tags.
+    Yields (tag, name, len, description, raw_value) tuples."""
+    import ie_decode as ies
     p = 0
     tags = []
     while p + 2 <= len(body):
         tag = body[p]
         ln = body[p + 1]
-        val = body[p + 2 : p + 2 + ln]
+        val = bytes(body[p + 2 : p + 2 + ln])
         if p + 2 + ln > len(body):
             break
         name = table.get(tag, f"tag#{tag}")
-        desc = ""
+        # Deep decode when we have a decoder.
+        _, ddesc = ies.decode_ie(tag, val)
         if tag == 0:  # SSID
             desc = val.decode("utf-8", "replace") or "(wildcard/empty)"
         elif tag == 1:  # Supported Rates
-            desc = " ".join(str(b >> 1) for b in val)
+            desc = ies.decode_rates(val)
         elif tag == 3:  # DS / channel
             desc = f"channel {val[0] if val else '?'}"
         elif tag == 221:  # Vendor-specific
             desc = f"vendor element, {ln} bytes"
-        tags.append((tag, name, ln, desc))
+        elif ddesc:
+            desc = ddesc
+        else:
+            desc = f"({ln} bytes)"
+        tags.append((tag, name, ln, desc, val))
         p += 2 + ln
     return tags
 
@@ -108,17 +115,31 @@ def analyze_wifi(payload, show_mac_bits=True):
         f"           add2(SA/TA):    {a2}  [{sm.mac_randomization_label(a2)}]",
         f"           add3(BSSID):    {a3}",
     ]
-    if ftype == 0:  # Management — advance past any fixed body header.
+    if ftype == 1:  # Control frames
+        # Common control subtypes: 8=BlockAck, 9=BlockAckReq, 10=PS-Poll,
+        # 11=RTS, 12=CTS, 13=ACK, 14=CF-End, 15=CF-End+CF-Ack
+        ctl = {8: "Block Ack", 9: "Block Ack Request", 10: "PS-Poll",
+               11: "RTS", 12: "CTS", 13: "ACK", 14: "CF-End", 15: "CF-End+CF-Ack"}
+        cname = ctl.get(fsub, sname)
+        lines.append(f"  Control: {cname}")
+        if fsub in (11, 12, 13):  # RTS/CTS/ACK carry a receiver address in a1
+            lines.append(f"           to {a1}")
+    elif ftype == 2:  # Data frames
+        qos = bool(fc & 0x0800)  # QoS subfield shares the retry bit for data? use ToDS/FromDS
+        ds_from = bool(fc & 0x0100)
+        ds_to = bool(fc & 0x0200)
+        lines.append(f"  Data: {'QoS ' if qos else ''}ToDS={int(ds_to)} FromDS={int(ds_from)}")
+    elif ftype == 0:  # Management — advance past any fixed body header.
         fixed = {1: 8, 3: 6, 5: 12, 8: 12, 11: 6}.get(fsub, 0)  # assoc/resp, probe-resp/beacon, auth
         body = payload[24 + fixed:]
 
         tags = parse_elements(body, IE_TABLE)
         lines.append(f"  {sname} body:")
-        for tag, name, ln, desc in tags:
+        for tag, name, ln, desc, val in tags:
             marker = "◄ WILDCARD SSID" if (tag == 0 and desc == "(wildcard/empty)") else "  "
             if name == "SSID" and desc != "(wildcard/empty)":
                 marker = "● SSID"
-            lines.append(f"        {marker} IE {name:<24} len={ln:<3} {desc}")
+            lines.append(f"        {marker} IE {name:<20} len={ln:<3} {desc}")
 
         if fsub == 4 and tags and tags[0][0] == 0 and tags[0][3] == "(wildcard/empty)":
             lines.append("  ➜ WILDCARD probe request (any AP may respond).")
@@ -177,6 +198,25 @@ BLE_AD_TYPES = {
 FLOCK_MFR_ID = 0x09C8
 
 
+# Common 16-bit GATT service UUIDs (for AD types 0x02-0x07)
+GATT_16 = {
+    0x1800: "Generic Access", 0x1801: "Generic Attribute", 0x180A: "Device Info",
+    0x180F: "Battery", 0x1812: "HID", 0x1819: "Location & Navigation",
+    0x1802: "Immediate Alert", 0x1803: "Link Loss", 0x1805: "Current Time",
+    0x180D: "Heart Rate", 0x180E: "Phone Alert", 0x1810: "Blood Pressure",
+    0x1811: "Alert Notification", 0x181A: "Environmental Sensing",
+    0x181D: "Body Composition", 0x181E: "Body Composition",
+    0x181F: "Continuous Glucose", 0x181C: "User Data", 0x1822: "Pulse Oximeter",
+}
+# Common BLE appearance codes (AD type 0x19, 2-byte LE)
+GATT_APPEARANCE = {0x0040: "Generic Phone", 0x00C0: "Generic Computer",
+                   0x00C5: "Laptop", 0x0180: "Generic Watch", 0x01C0: "Generic Tag"}
+
+
+def _uuid16_name(u16):
+    return GATT_16.get(u16, f"0x{u16:04X}")
+
+
 def parse_ble_ad(payload):
     """Break down a BLE advertising PDU (the payload of an HCI_LE_Advertise)."""
     lines = []
@@ -190,16 +230,26 @@ def parse_ble_ad(payload):
         desc = f"({data_len} bytes)"
         if atype in (0x08, 0x09):
             desc = f"{data.decode('utf-8', 'replace')!r}"
+        elif atype in (0x02, 0x03):  # 16-bit service UUIDs (LE)
+            uuids = [data[i] | (data[i + 1] << 8) for i in range(0, len(data) - 1, 2)]
+            desc = ", ".join(f"{_uuid16_name(u)}(0x{u:04X})" for u in uuids)
+        elif atype in (0x06, 0x07):  # 128-bit UUIDs
+            desc = f"{len(data) // 16} x 128-bit UUID(s)"
+        elif atype == 0x0A:
+            desc = f"TX power: {struct.unpack('<b', bytes([data[0]]))[0] if data else '?'} dBm"
+        elif atype == 0x19:  # Appearance (2-byte LE)
+            if len(data) >= 2:
+                app = data[0] | (data[1] << 8)
+                desc = GATT_APPEARANCE.get(app, f"0x{app:04X}")
+        elif atype == 0x01 and data:  # Flags
+            desc = f"flags=0x{data[0]:02X}"
         elif atype == 0xFF and len(data) >= 2:
-            # Manufacturer Specific: first 2 bytes are Company ID, little-endian
             co = data[0] | (data[1] << 8)
             is_flock = co == FLOCK_MFR_ID
             desc = (f"CompanyID=0x{co:04X} ({'FLOCK' if is_flock else 'vendor'}), "
                     f"payload={data[2:].hex() or '(none)'}")
             if is_flock:
                 lines.append("  ➜ Flock manufacturer Company ID 0x09C8 detected!")
-        elif atype == 0x0A:
-            desc = f"TX power: {struct.unpack('<b', bytes([data[0]]))[0] if data else '?'} dBm"
         lines.append(f"  AD type {atype:02X} {name:<26} {desc}")
         p += 1 + ln   # AD header is [len][type][data]; len counts type+data
     return "\n".join(lines)

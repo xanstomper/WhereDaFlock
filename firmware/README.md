@@ -142,13 +142,17 @@ firmware/
 │   └── session.h              # SPIFFS persistence + NVS beep mask + host commands
 ├── host_scanner.py            # WiFi host companion (Scapy)
 ├── ble_scanner.py             # BLE host companion (Bleak)
-├── packet_analyzer.py         # passive frame decoder (educational)
+├── packet_analyzer.py         # passive frame decoder (802.11 + BLE, deep IE)
+├── ie_decode.py               # deep 802.11 IE decoder (RSN/HT/VHT/country/rates)
 ├── signal_math.py             # RSSI→distance, multilateration, MAC-bit analysis
+├── analyze_batch.py           # aggregate many pcaps into a report (JSON/HTML)
 ├── tests/
 │   ├── test_detection.py      # WiFi OUI/tier tests
 │   ├── test_ble_detection.py  # BLE mfr-ID/name/UUID tests
 │   ├── test_packet_analyzer.py# 802.11 + BLE frame decoder tests
-│   └── test_signal_math.py    # distance / multilateration / MAC-bit tests
+│   ├── test_signal_math.py    # distance / multilateration / MAC-bit tests
+│   ├── test_ie_decode.py      # RSN / HT / VHT / country / rates decoding
+│   └── test_analyze_batch.py  # pcap aggregation math
 ├── platformio.ini             # WiFi env + BLE env targets
 ├── partitions.csv
 └── LICENSE                    # MIT
@@ -246,6 +250,42 @@ Multilateration requires positions you supply (your own receiver coordinates);
 it is pure math for studying how signal strength localizes a transmitter.
 
 Tests: `python3 tests/test_signal_math.py`
+
+## Deep 802.11 IE decoding (`ie_decode.py`)
+
+The analyzer walks **Information Elements** and decodes the interesting ones
+field-by-field instead of just naming them:
+
+| IE | Decoded details |
+|----|-----------------|
+| RSN (48) | group/pairwise cipher (CCMP/TKIP/GCMP…), AKM (PSK/802.1X/SAE/OWE…), capabilities |
+| HT Capabilities (45) | channel width (20/40 MHz), short-GI, MCS set |
+| HT Operation (61) | primary channel, secondary offset |
+| Country (7) | country code + regulatory environment |
+| VHT Capabilities (191) | 80/160 MHz support |
+| Supported / Extended Rates (1/50) | actual bitrates incl. basic-rate flag |
+
+Example of what the analyzer now shows for a WPA2 beacon's RSN element:
+
+```
+IE RSN/security       len=20  ver=1 group=CCMP pwises=CCMP akms=PSK caps=0x0000
+```
+
+Tests: `python3 tests/test_ie_decode.py`
+
+## Batch pcap analysis (`analyze_batch.py`)
+
+Aggregate many offline captures into one report — per-transmitter activity,
+frame-type histogram, randomized-MAC prevalence, Flock-OUI transmitters, and
+RSSI/distance stats:
+
+```bash
+python3 analyze_batch.py captures/*.pcap                # text report
+python3 analyze_batch.py a.pcap b.pcap --json out.json  # machine-readable
+python3 analyze_batch.py *.pcap --html report.html      # self-contained HTML
+```
+
+Tests: `python3 tests/test_analyze_batch.py`
 
 ## Standalone persistence & device control (WiFi firmware)
 
