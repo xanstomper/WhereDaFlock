@@ -10,11 +10,12 @@
 
 PY=python3
 
-.PHONY: test firmware wifi ble dashboard emulator
+.PHONY: test firmware wifi ble dashboard emulator analyze
 
 test:
 	$(PY) firmware/tests/test_detection.py
 	$(PY) firmware/tests/test_ble_detection.py
+	$(PY) firmware/tests/test_packet_analyzer.py
 
 wifi:
 	cd firmware && pio run -e xiao_esp32s3
@@ -26,6 +27,9 @@ firmware: wifi ble
 
 dashboard:
 	cd api && $(PY) app.py
+
+analyze:
+	$(PY) firmware/packet_analyzer.py --help
 
 emulator:
 	cd tools/emulator && pio run 2>/dev/null || \

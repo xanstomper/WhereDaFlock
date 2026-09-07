@@ -142,9 +142,11 @@ firmware/
 │   └── session.h              # SPIFFS persistence + NVS beep mask + host commands
 ├── host_scanner.py            # WiFi host companion (Scapy)
 ├── ble_scanner.py             # BLE host companion (Bleak)
+├── packet_analyzer.py         # passive frame decoder (educational)
 ├── tests/
 │   ├── test_detection.py      # WiFi OUI/tier tests
-│   └── test_ble_detection.py  # BLE mfr-ID/name/UUID tests
+│   ├── test_ble_detection.py  # BLE mfr-ID/name/UUID tests
+│   └── test_packet_analyzer.py# 802.11 + BLE frame decoder tests
 ├── platformio.ini             # WiFi env + BLE env targets
 ├── partitions.csv
 └── LICENSE                    # MIT
@@ -173,6 +175,49 @@ python3 tests/test_ble_detection.py
 To validate without a real camera, see
 [`tools/emulator/FlockCam_emulator.ino`](../tools/emulator/FlockCam_emulator.ino)
 (⚠️ test-only beacon that transmits the Flock mfr ID; bench use only).
+
+## Passive packet analyzer (framing / learning)
+
+`packet_analyzer.py` decodes the actual frames frame-by-frame so you can *see*
+why a detection happens — it is the educational companion to the detector,
+which only *matches* signatures. It works on WiFi (802.11 probe requests) and
+BLE (advertising PDUs), both passively.
+
+Usage (needs `pip install scapy` for capture / offline pcap):
+
+```bash
+# Decode an offline capture (no hardware or root needed)
+python3 packet_analyzer.py --pcap capture.pcap --count 20
+
+# Live decode on a monitor-mode interface (root)
+sudo python3 packet_analyzer.py --live wlan0 --count 5
+```
+
+Sample output for a Flock-style probe request:
+
+```
+  Frame:  Management / Probe Request  (type=0 subtype=4)
+           add2(SA/TA): 82:6B:F2:14:07:3A
+  Probe Request body:
+        ◄ WILDCARD SSID IE SSID len=0 (wildcard/empty)
+           IE Supported Rates len=4 ...
+           IE Vendor Specific       ...
+  ➜ This is a WILDCARD probe request (any AP may respond).
+```
+
+And for a Flock BLE advertisement:
+
+```
+  AD type 09 Complete local name 'FS Ext Battery'
+  AD type FF Manufacturer Specific  CompanyID=0x09C8 (FLOCK), payload=010203
+  ➜ Flock manufacturer Company ID 0x09C8 detected!
+```
+
+Regression tests (all passive, no hardware):
+
+```bash
+python3 tests/test_packet_analyzer.py
+```
 
 ## Standalone persistence & device control (WiFi firmware)
 
