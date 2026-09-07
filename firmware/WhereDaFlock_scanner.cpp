@@ -29,6 +29,8 @@
 #include <esp_wifi.h>
 #include "src/signatures.h"
 #include "src/session.h"
+#include "src/hal.h"
+
 #include "src/display_dongle.h"
 #include "src/ble_telemetry.h"
 
@@ -173,24 +175,18 @@ volatile uint8_t wdfBeepMask = BEEP_MASK_DEFAULT;
 // ---------------------------------------------------------------------------
 // LED / buzzer helpers
 // ---------------------------------------------------------------------------
-static inline void ledSet(bool on) {
-#if LED_ACTIVE_HIGH
-  digitalWrite(LED_PIN, on ? HIGH : LOW);
-#else
-  digitalWrite(LED_PIN, on ? LOW : HIGH);
-#endif
-}
+static inline void ledSet(bool on) { wdf_hal::ledSet(on); }
 static void ledTick() {
-  if (ledOffAt && (long)(millis() - ledOffAt) >= 0) { ledSet(false); ledOffAt = 0; }
+  if (ledOffAt && (long)(millis() - ledOffAt) >= 0) { wdf_hal::ledSet(false); ledOffAt = 0; }
 }
 static inline bool tierAudible(uint8_t tier) {
   return tier < TIER_COUNT && ((wdfBeepMask >> tier) & 0x01);
 }
-static void blip(uint16_t hz) { tone(BUZZER_PIN, hz); delay(BLIP_MS); noTone(BUZZER_PIN); }
+static void blip(uint16_t hz) { wdf_hal::toneStart(hz); delay(BLIP_MS); wdf_hal::toneStop(); }
 static void chirp2(uint16_t lo, uint16_t hi) {
-  tone(BUZZER_PIN, lo); delay(TIER_NOTE_MS); noTone(BUZZER_PIN);
+  wdf_hal::toneStart(lo); delay(TIER_NOTE_MS); wdf_hal::toneStop();
   delay(TIER_GAP_MS);
-  tone(BUZZER_PIN, hi); delay(TIER_NOTE_MS); noTone(BUZZER_PIN);
+  wdf_hal::toneStart(hi); delay(TIER_NOTE_MS); wdf_hal::toneStop();
 }
 static void tierChirp(uint8_t tier) {
   if (!tierAudible(tier)) return;
@@ -204,9 +200,9 @@ static void tierChirp(uint8_t tier) {
   }
 }
 static void heartbeatBeep() {
-  tone(BUZZER_PIN, HB_BEEP_HZ); delay(HB_NOTE_MS); noTone(BUZZER_PIN);
+  wdf_hal::toneStart(HB_BEEP_HZ); delay(HB_NOTE_MS); wdf_hal::toneStop();
   delay(HB_GAP_MS);
-  tone(BUZZER_PIN, HB_BEEP_HZ); delay(HB_NOTE_MS); noTone(BUZZER_PIN);
+  wdf_hal::toneStart(HB_BEEP_HZ); delay(HB_NOTE_MS); wdf_hal::toneStop();
 }
 
 static void startupBeep() {
@@ -215,9 +211,9 @@ static void startupBeep() {
   // pattern: C4, C5, A3, A4, B♭3, B♭4 (alternating-octave pairs).
   static const uint16_t notes[6] = { 262, 523, 220, 440, 233, 466 };
   for (int i = 0; i < 6; i++) {
-    tone(BUZZER_PIN, notes[i]);
+    wdf_hal::toneStart(notes[i]);
     delay((i == 5) ? 160 : 95);
-    noTone(BUZZER_PIN);
+    wdf_hal::toneStop();
     if (i < 5) delay(22);
   }
 #endif
@@ -529,9 +525,11 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  pinMode(LED_PIN, OUTPUT);
-  ledSet(false);
-  pinMode(BUZZER_PIN, OUTPUT);
+  // Board-neutral LED/buzzer init (raw GPIO on generic ESP32, M5Unified on
+  // M5Stack boards).
+  wdf_hal::ledInit();
+  wdf_hal::ledSet(false);
+  wdf_hal::buzzerInit();
 
   // Pre-compile OUIs into byte table (kept in IRAM). Note: 82:6b:f2 is kept;
   // do not add a locally-administered skip - it would drop a real camera.

@@ -129,6 +129,14 @@ jobs:
         working-directory: firmware
         run: pio run -e xiao_esp32s3_ble
 
+      - name: Build M5StickC Plus 1.1 (WiFi + BLE)
+        working-directory: firmware
+        run: pio run -e m5stickc_plus -e m5stickc_plus_ble
+
+      - name: Build M5Stack family (stickc, cores3, stamps3, generic)
+        working-directory: firmware
+        run: pio run -e m5stickc -e m5stack_cores3 -e m5stack_stamps3 -e m5stack_generic
+
       - name: Build emulator test beacon (pio ci)
         working-directory: tools/emulator
         run: |

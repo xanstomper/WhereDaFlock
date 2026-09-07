@@ -15,7 +15,7 @@
 PY=python3
 GO=go
 
-.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble emulator analyze flash verify ci help
+.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble m5 emulator analyze flash verify ci help
 
 test:
 	$(PY) firmware/tests/test_detection.py
@@ -53,6 +53,10 @@ ble:
 	cd firmware && pio run -e xiao_esp32s3_ble
 
 firmware: wifi ble
+
+m5:
+	cd firmware && pio run -e m5stickc_plus -e m5stickc_plus_ble -e m5stickc \
+		-e m5stack_cores3 -e m5stack_stamps3 -e m5stack_generic
 
 emulator:
 	cd tools/emulator && pio ci FlockCam_emulator.ino \

@@ -25,6 +25,7 @@
 #include <BLEAdvertisedDevice.h>
 #include <ArduinoJson.h>
 #include "src/ble_signatures.h"
+#include "src/hal.h"
 
 using namespace WhereDaFlockBLE;
 
@@ -121,11 +122,11 @@ bool matchesServiceUUID(BLEAdvertisedDevice* device, String& which) {
 // Alert buzz + LED flash.
 // ---------------------------------------------------------------------------
 void beep(int ms = ALERT_MS) {
-  digitalWrite(LED_PIN, LED_ACTIVE_HIGH ? HIGH : LOW);
-  tone(BUZZER_PIN, ALERT_FREQ_HZ);
+  wdf_hal::ledSet(true);
+  wdf_hal::toneStart(ALERT_FREQ_HZ);
   delay(ms);
-  noTone(BUZZER_PIN);
-  digitalWrite(LED_PIN, LED_ACTIVE_HIGH ? LOW : HIGH);
+  wdf_hal::toneStop();
+  wdf_hal::ledSet(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -231,9 +232,10 @@ void setup() {
   Serial.begin(115200);
   delay(300);
 
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LED_ACTIVE_HIGH ? LOW : HIGH);
-  pinMode(BUZZER_PIN, OUTPUT);
+  // Board-neutral LED/buzzer init (raw GPIO or M5Unified for M5Stack boards).
+  wdf_hal::ledInit();
+  wdf_hal::ledSet(false);
+  wdf_hal::buzzerInit();
 
   Serial.println("WhereDaFlock BLE v1.0.0 - passive Flock BLE beacon scanner");
   Serial.println("RECEIVE-ONLY. No transmissions, no connections.");

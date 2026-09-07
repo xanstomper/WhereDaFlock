@@ -87,6 +87,25 @@ arduino-cli monitor --port /dev/ttyUSB0 --config baudrate=115200
 project; for a bare firmware build you can create a minimal `platformio.ini`
 targeting `xiao_esp32s3` with a 6 MB app / 1.94 MB SPIFFS partition.
 
+### M5Stack boards (M5StickC, M5StickC Plus 1.1, Core, Atom, StampS3)
+
+On M5 devices the firmware uses **M5Unified**, so one source runs on the whole
+M5Stack family. Build for your **M5StickC Plus 1.1** with:
+
+```bash
+cd firmware
+pio run -e m5stickc_plus            # WiFi detector (you)
+pio run -e m5stickc_plus_ble        # BLE beacon scanner (you)
+pio run -e m5stickc                 # original M5StickC
+pio run -e m5stack_cores3           # M5Stack CoreS3
+pio run -e m5stack_stamps3          # M5Stack StampS3
+pio run -e m5stack_generic          # any other (override board=)
+```
+
+`firmware/src/hal.h` is the board-abstraction seam; see
+[`docs/HARDWARE-M5.md`](../docs/HARDWARE-M5.md) for the M5StickC Plus 1.1 pins
+(red LED on GPIO 10, buzzer, button) and wiring details.
+
 ---
 
 ## Serial output
