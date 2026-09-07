@@ -1,8 +1,35 @@
+<p align="center">
+  <img src="assets/banner.jpg" alt="WhereDaFlock Banner" width="100%" style="border-radius: 8px;">
+</p>
+
 # WhereDaFlock 🛡️
 
-**A Privacy-First Surveillance Countermeasure, Navigation Assistant & 2.4GHz RF Detection Ecosystem**
+<p align="center">
+  <strong>An Open-Source 2.4GHz RF Surveillance Countermeasure & Privacy-Preserving Navigation Ecosystem</strong>
+</p>
 
-> *"Navigate freely. Stay unseen."*
+<p align="center">
+  <em>Defending spatial privacy through passive RF detection, on-device machine learning, and surveillance-aware routing.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/xanstomper/WhereDaFlock/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6.0-FA7343.svg?style=for-the-badge&logo=swift&logoColor=white" alt="Swift 6"></a>
+  <a href="https://developer.apple.com/ios/"><img src="https://img.shields.io/badge/iOS-17.0%2B-000000.svg?style=for-the-badge&logo=apple&logoColor=white" alt="iOS 17+"></a>
+  <a href="https://www.espressif.com/"><img src="https://img.shields.io/badge/ESP32--S3-Promiscuous%20RF-E7352C.svg?style=for-the-badge&logo=espressif&logoColor=white" alt="ESP32-S3"></a>
+  <a href="https://platformio.org/"><img src="https://img.shields.io/badge/PlatformIO-Ready-orange.svg?style=for-the-badge&logo=platformio&logoColor=white" alt="PlatformIO"></a>
+  <a href="#"><img src="https://img.shields.io/badge/RF-Receive--Only%20(Listen)-008080.svg?style=for-the-badge" alt="Receive Only"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Privacy-Zero--Knowledge-6f42c1.svg?style=for-the-badge" alt="Zero-Knowledge"></a>
+</p>
+
+<p align="center">
+  <a href="#1-system-overview--threat-landscape">System Overview</a> •
+  <a href="#2-flock-safety-cameras-complete-architecture-tech-stack--framework">Flock Camera Teardown</a> •
+  <a href="#3-wheredaflock-firmware-architecture-firmware">Firmware Engine</a> •
+  <a href="#4-wheredaflock-ios-application-architecture-wheredaflock">iOS App</a> •
+  <a href="#5-hardware-assembly--firmware-flashing-guide">Hardware & Flashing</a> •
+  <a href="#6-empirical-datasets--ieee-oui-database-datasets">Datasets</a>
+</p>
 
 ---
 
@@ -23,8 +50,10 @@
    - [The 5 Confidence Tiers](#the-5-confidence-tiers)
    - [OUI Registry & The Locally Administered MAC Bit](#oui-registry--the-locally-administered-mac-bit)
    - [Concurrency, Ring Buffer & Deduplication](#concurrency-ring-buffer--deduplication)
+   - [On-Device Session Persistence & NVS Audio Muting](#on-device-session-persistence--nvs-audio-muting-srcsessionh)
+   - [Hardware Display Driver](#hardware-display-driver-srcdisplay_dongleh-display_donglecpp)
    - [Auditory & Serial Output Protocol](#auditory--serial-output-protocol)
-   - [Python Host Companion (`host_scanner.py`)](#python-host-companion-host_scannerpy)
+   - [Python Host Companion](#python-host-companion-host_scannerpy)
 4. [WhereDaFlock iOS Application Architecture (`WhereDaFlock/`)](#4-wheredaflock-ios-application-architecture-wheredaflock)
    - [Architecture & Technology Stack](#architecture--technology-stack)
    - [Live Intelligence Map & Spatial Clustering](#live-intelligence-map--spatial-clustering)
@@ -32,10 +61,11 @@
    - [Multi-Modal Scanner Suite (Vision, BLE, Telemetry)](#multi-modal-scanner-suite-vision-ble-telemetry)
    - [Zero-Knowledge Privacy Engine & Cryptography](#zero-knowledge-privacy-engine--cryptography)
    - [Community Reporting & Confidence Decay](#community-reporting--confidence-decay)
-5. [Backend Infrastructure & API Framework (`Backend/`)](#5-backend-infrastructure--api-framework-backend)
+5. [Backend Infrastructure & Web Dashboard (`Backend/`, `api/`)](#5-backend-infrastructure--web-dashboard-backend-api)
 6. [Hardware Assembly & Firmware Flashing Guide](#6-hardware-assembly--firmware-flashing-guide)
 7. [iOS Build & CoreML Model Setup](#7-ios-build--coreml-model-setup)
-8. [Ethical & Legal Disclosures](#8-ethical--legal-disclosures)
+8. [Empirical Datasets & IEEE OUI Database (`datasets/`)](#8-empirical-datasets--ieee-oui-database-datasets)
+9. [Ethical & Legal Disclosures](#9-ethical--legal-disclosures)
 
 ---
 
@@ -57,6 +87,7 @@ Automated License Plate Readers (ALPR) and wide-area vehicle fingerprinting netw
 │  - CoreBluetooth Peripheral Radar │  - Wildcard 802.11 Probe Parser    │
 │  - CoreMotion Sensor Telemetry    │  - Information Element Fingerprint │
 │  - Secure Enclave + Ghost Mode    │  - Real-time JSON Serial + Buzzer  │
+│  - Anonymous P2P Community Mesh   │  - SPIFFS Logging + OLED / LCD     │
 └───────────────────────────────────┴────────────────────────────────────┘
 ```
 
@@ -248,7 +279,7 @@ The firmware is an ultra-fast, **receive-only** 802.11 promiscuous sniffer engin
                              ▼                    ▼
                    ┌──────────────────┐  ┌──────────────────┐
                    │ Piezo Buzzer PWM │  │ USB CDC Serial   │
-                   │ & LED Pulse      │  │ JSON Telemetry   │
+                   │ & OLED Display   │  │ JSON Telemetry   │
                    └──────────────────┘  └──────────────────┘
 ```
 
@@ -261,7 +292,8 @@ The firmware is an ultra-fast, **receive-only** 802.11 promiscuous sniffer engin
 | **GPIO 21** | Onboard User LED | Output | Visual detection alert (Active-Low circuit) |
 | **USB D+/D-** | Native USB-CDC | Bidirectional | 115200 baud JSON serial output and debug console |
 
-> **Zero Transmission Guarantee:** The firmware explicitly configures `WIFI_MODE_NULL` before promiscuous activation. No Access Point, station association, or packet transmission occurs. The radio acts as a 100% passive RF sensor.
+> [!NOTE]
+> **Zero Transmission Guarantee:** The firmware explicitly configures `WIFI_MODE_NULL` before promiscuous activation. No Access Point, station association, or packet transmission occurs. The radio operates as a 100% passive RF sensor.
 
 ---
 
@@ -384,7 +416,9 @@ $$\text{Octet 0} = \text{b}_7\text{b}_6\text{b}_5\text{b}_4\text{b}_3\text{b}_2\
 
 For OUI `82:6b:f2`:
 $$0\text{x}82 = 100000\mathbf{1}0_2 \implies \mathbf{b}_1 = 1$$
-Many standard wireless sniffers reject locally administered MAC addresses under the assumption that they are randomized smartphone MACs. **WhereDaFlock explicitly omits the locally administered filter**, preserving detection of `82:6b:f2` cameras deployed in the field.
+
+> [!WARNING]
+> Many standard wireless sniffers reject locally administered MAC addresses under the assumption that they are randomized smartphone MACs. **WhereDaFlock explicitly omits the locally administered filter**, preserving detection of `82:6b:f2` cameras deployed in the field.
 
 ---
 
@@ -395,6 +429,36 @@ Many standard wireless sniffers reject locally administered MAC addresses under 
    - **Cooldown:** When a MAC is detected, duplicate chirps and serial outputs are suppressed for **5,000 ms**.
    - **Tier Upgrades:** If a device previously seen at Tier 2 emits a Tier 4 frame, the cooldown is bypassed immediately, upgrading the detection table and emitting a Tier 4 alert.
    - **Rediscovery:** If a device re-appears after **30,000 ms** of silence, it is treated as a new encounter.
+
+---
+
+### On-Device Session Persistence & NVS Audio Muting (`src/session.h`)
+
+Pulled directly from the `flock-you` ecosystem, WhereDaFlock provides robust offline persistence and interactive host control:
+
+- **CRC-Validated SPIFFS Storage:**
+  - Active detections are automatically backed up to `/session.json` on flash every 60 seconds (or immediately prior to power-off).
+  - On system boot, `/session.json` is automatically promoted to `/prev_session.json`, ensuring offline drive-test sessions are preserved across power cycles.
+  - The dashboard can pull offline runs via the `dump_session` command (`source: "live"` or `source: "prev"`).
+- **Non-Volatile (NVS) Beep Mask:**
+  - Audio muting per tier is saved to ESP32 Non-Volatile Storage (`Preferences`), persisting user sound preferences across reboots.
+- **Interactive Control Protocol:**
+  - Responds to newline-delimited JSON commands over USB CDC:
+    - `{"cmd":"get_config"}` $\to$ Emits current tier mute mask and firmware build metadata.
+    - `{"cmd":"set_beep","tier":4,"on":1}` $\to$ Toggles specific tier audio alerts.
+    - `{"cmd":"set_beep_mask","mask":31}` $\to$ Applies a 5-bit bitmask to all tiers.
+    - `{"cmd":"dump_session","source":"live|prev"}` $\to$ Streams offline session records with checksum verification.
+    - `{"cmd":"clear_session"}` $\to$ Clears active RAM and flash detection tables.
+
+---
+
+### Hardware Display Driver (`src/display_dongle.h`, `display_dongle.cpp`)
+
+For headless or standalone dash-mounted operation, the firmware integrates plug-and-play display support:
+
+- **LilyGO T-Dongle S3 Support:** Drives the onboard ST7735 80x160 IPS color LCD and APA102 RGB LED. Shows real-time channel hopping, total hit count, and high-visibility red alert cards with target MAC, RSSI, and detection method.
+- **Zero-Overhead Fallback:** When compiling for standard boards (e.g. Seeed XIAO ESP32-S3), all display calls resolve to inline no-ops, incurring zero binary size or execution penalty.
+- **Super Mario Bros 1-2 Boot Audio:** Plays Koji Kondo's descending underground motif (C4, C5, A3, A4, B♭3, B♭4) on boot via buzzer so operational readiness is confirmed without a screen.
 
 ---
 
@@ -441,62 +505,6 @@ sudo ip link set wlan0 up
 # Execute host scanner
 sudo python3 host_scanner.py --scan 30 --iface wlan0 --json detections.json
 ```
-
----
-
-### On-Device Session Persistence & NVS Audio Muting (`src/session.h`)
-
-Pulled directly from the `flock-you` ecosystem, WhereDaFlock provides robust offline persistence and interactive host control:
-
-- **CRC-Validated SPIFFS Storage:**
-  - Active detections are automatically backed up to `/session.json` on flash every 60 seconds (or immediately prior to power-off).
-  - On system boot, `/session.json` is automatically promoted to `/prev_session.json`, ensuring offline drive-test sessions are preserved across power cycles.
-  - The dashboard can pull offline runs via the `dump_session` command (`source: "live"` or `source: "prev"`).
-- **Non-Volatile (NVS) Beep Mask:**
-  - Audio muting per tier is saved to ESP32 Non-Volatile Storage (`Preferences`), persisting user sound preferences across reboots.
-- **Interactive Control Protocol:**
-  - Responds to newline-delimited JSON commands over USB CDC:
-    - `{"cmd":"get_config"}` $\to$ Emits current tier mute mask and firmware build metadata.
-    - `{"cmd":"set_beep","tier":4,"on":1}` $\to$ Toggles specific tier audio alerts.
-    - `{"cmd":"set_beep_mask","mask":31}` $\to$ Applies a 5-bit bitmask to all tiers.
-    - `{"cmd":"dump_session","source":"live|prev"}` $\to$ Streams offline session records with checksum verification.
-    - `{"cmd":"clear_session"}` $\to$ Clears active RAM and flash detection tables.
-
----
-
-### Hardware Display Driver (`src/display_dongle.h`, `display_dongle.cpp`)
-
-For headless or standalone dash-mounted operation, the firmware integrates plug-and-play display support:
-
-- **LilyGO T-Dongle S3 Support:** Drives the onboard ST7735 80x160 IPS color LCD and APA102 RGB LED. Shows real-time channel hopping, total hit count, and high-visibility red alert cards with target MAC, RSSI, and detection method.
-- **Zero-Overhead Fallback:** When compiling for standard boards (e.g. Seeed XIAO ESP32-S3), all display calls resolve to inline no-ops, incurring zero binary size or execution penalty.
-
----
-
-### Empirical Datasets & IEEE OUI Database (`datasets/`)
-
-The repository bundles field-verified Wardriving datasets and reference databases from real-world Flock camera deployments:
-
-| Dataset File | Description | Records / Size |
-|:---|:---|:---|
-| `datasets/oui.txt` | Complete IEEE OUI registry for resolving MAC vendor names in API & scanner | ~6.2 MB |
-| `datasets/NitekryDPaul_wifi_ouis.md` | Research notes, change log, and OUI extraction methodology | Documentation |
-| `datasets/FS+Ext+Battery_20240530_105846.csv` | Field capture of Flock external solar/battery management RF signatures | 1.1 MB CSV |
-| `datasets/Flock-_______20240530_124303.csv` | Historical capture log of legacy Flock AP beacons | 174 KB CSV |
-| `datasets/Penguin-___________20240530_111436.csv` | Capture log of Penguin / Falcon ALPR infrastructure | 4.2 MB CSV |
-| `datasets/Pigvision.csv` | Empirical ALPR observations across municipal corridors | 47 KB CSV |
-| `datasets/maximum_dots.csv` | High-density GPS waypoint capture dataset | 306 KB CSV |
-
----
-
-### Web Dashboard & Dual-Port Ingest (`api/`)
-
-The accompanying Flask + SocketIO web dashboard (`api/app.py`) provides real-time multi-sensor telemetry:
-
-- **Simultaneous Dual-Port Ingest:** Ingests 2.4GHz WiFi frames and BLE beacon detections concurrently on separate USB serial ports via `flockyou_ble.py`.
-- **Automated OUI Vendor Resolution:** Queries `api/oui.txt` to tag incoming MAC addresses with hardware manufacturer names (e.g. *Espressif Inc.*, *Ambarella*).
-- **GPS Temporal Buffer:** Integrates NMEA GPS pucks or `gpsd` with a 100-sample sliding buffer to stamp detections with exact geographic coordinates.
-- **Export Formats:** Generates styled Google Earth KML files with custom placemarks and CSV tables for GIS analysis.
 
 ---
 
@@ -708,7 +716,7 @@ enum ReportType: String, Codable, CaseIterable {
 
 ---
 
-## 5. Backend Infrastructure & API Framework (`Backend/`)
+## 5. Backend Infrastructure & Web Dashboard (`Backend/`, `api/`)
 
 For users opting into anonymous community synchronization, the optional backend operates on an **ephemeral, zero-knowledge** pipeline.
 
@@ -763,27 +771,25 @@ CREATE TABLE community_reports (
 CREATE INDEX idx_reports_geom ON community_reports USING GIST(geom);
 ```
 
-### Spatial Query Endpoint Example (`GET /v1/cameras`):
-```sql
-SELECT id, camera_type, ST_X(geom) as lng, ST_Y(geom) as lat, confidence
-FROM cameras
-WHERE ST_DWithin(
-    geom::geography,
-    ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-    $3 -- Radius in meters
-);
-```
+### Web Dashboard & Dual-Port Ingest (`api/app.py`, `api/flockyou_ble.py`)
+
+The accompanying Flask + SocketIO web dashboard provides real-time multi-sensor telemetry:
+
+- **Simultaneous Dual-Port Ingest:** Ingests 2.4GHz WiFi frames and BLE beacon detections concurrently on separate USB serial ports via `flockyou_ble.py`.
+- **Automated OUI Vendor Resolution:** Queries `api/oui.txt` to tag incoming MAC addresses with hardware manufacturer names (e.g. *Espressif Inc.*, *Ambarella*).
+- **GPS Temporal Buffer:** Integrates NMEA GPS pucks or `gpsd` with a 100-sample sliding buffer to stamp detections with exact geographic coordinates.
+- **Export Formats:** Generates styled Google Earth KML files with custom placemarks and CSV tables for GIS analysis.
 
 ---
 
 ## 6. Hardware Assembly & Firmware Flashing Guide
 
 ### Hardware Shopping List:
-1. **Microcontroller:** Seeed Studio XIAO ESP32-S3 (or any ESP32 / ESP32-S3 development board).
+1. **Microcontroller:** Seeed Studio XIAO ESP32-S3 (or LilyGO T-Dongle S3 / generic ESP32-S3).
 2. **Piezo Buzzer:** 3V–5V active or passive piezo buzzer.
 3. **USB Cable:** USB-C data cable for flashing and serial monitoring.
 
-### Wiring Diagram:
+### Wiring Diagram (Seeed XIAO ESP32-S3):
 
 ```
     Seeed Studio XIAO ESP32-S3
@@ -804,13 +810,13 @@ WHERE ST_DWithin(
 # Navigate to firmware directory
 cd firmware
 
-# Build project targeting the XIAO ESP32-S3
-pio run -e xiao_esp32s3
-
-# Flash firmware over USB
+# Build and flash for Seeed XIAO ESP32-S3
 pio run -e xiao_esp32s3 -t upload
 
-# Open serial monitor to observe JSON detections
+# Or flash for LilyGO T-Dongle S3 with LCD screen
+pio run -e lilygo_t_dongle_s3 -t upload
+
+# Open serial monitor
 pio device monitor -b 115200
 ```
 
@@ -823,7 +829,7 @@ arduino-cli core install esp32:esp32
 # Compile sketch
 arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/WhereDaFlock_scanner.ino
 
-# Flash to connected board (adjust port to your system)
+# Flash to connected board
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32s3 firmware/WhereDaFlock_scanner.ino
 
 # Monitor output
@@ -868,7 +874,23 @@ Drag the exported `CameraDetector.mlpackage` directly into `WhereDaFlock/AI/` in
 
 ---
 
-## 8. Ethical & Legal Disclosures
+## 8. Empirical Datasets & IEEE OUI Database (`datasets/`)
+
+The repository bundles field-verified Wardriving datasets and reference databases from real-world Flock camera deployments:
+
+| Dataset File | Description | Records / Size |
+|:---|:---|:---|
+| `datasets/oui.txt` | Complete IEEE OUI registry for resolving MAC vendor names in API & scanner | ~6.2 MB |
+| `datasets/NitekryDPaul_wifi_ouis.md` | Research notes, change log, and OUI extraction methodology | Documentation |
+| `datasets/FS+Ext+Battery_20240530_105846.csv` | Field capture of Flock external solar/battery management RF signatures | 1.1 MB CSV |
+| `datasets/Flock-_______20240530_124303.csv` | Historical capture log of legacy Flock AP beacons | 174 KB CSV |
+| `datasets/Penguin-___________20240530_111436.csv` | Capture log of Penguin / Falcon ALPR infrastructure | 4.2 MB CSV |
+| `datasets/Pigvision.csv` | Empirical ALPR observations across municipal corridors | 47 KB CSV |
+| `datasets/maximum_dots.csv` | High-density GPS waypoint capture dataset | 306 KB CSV |
+
+---
+
+## 9. Ethical & Legal Disclosures
 
 1. **Passive Radio Reception:** WhereDaFlock's firmware operates exclusively in a **receive-only** capacity. It never transmits 802.11 frames, never generates RF interference, never performs unauthorized network penetration, and never associates with external networks. Under United States Federal law (47 U.S.C. § 605) and comparable international statutes, listening to unencrypted electromagnetic transmissions broadcast openly across public spectrum is lawful.
 2. **First Amendment & Public Surveillance Documentation:** Documenting or mapping surveillance devices placed in public view on municipal easements and public roadways is protected activity under the First Amendment of the United States Constitution.
@@ -876,4 +898,6 @@ Drag the exported `CameraDetector.mlpackage` directly into `WhereDaFlock/AI/` in
 
 ---
 
-**WhereDaFlock Project** — *Defending spatial privacy through open technology.*
+<p align="center">
+  <strong>WhereDaFlock Project</strong> — <em>Defending spatial privacy through open technology.</em>
+</p>
