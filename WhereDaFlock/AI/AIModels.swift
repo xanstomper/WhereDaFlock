@@ -9,7 +9,7 @@ class CameraDetectionModel {
     
     var model: MLModel? {
         let possibleNames = ["CameraDetector", "YOLOv8Surveillance", "ALPRDetector"]
-        let possibleExtensions = ["mlmodelc", "mlpackage"]
+        let possibleExtensions = ["mlmodelc", "mlpackage", "mlmodel"]
         
         for name in possibleNames {
             for ext in possibleExtensions {

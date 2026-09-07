@@ -15,7 +15,7 @@
 PY=python3
 GO=go
 
-.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble emulator analyze ci help
+.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble emulator analyze flash verify ci help
 
 test:
 	$(PY) firmware/tests/test_detection.py
@@ -58,6 +58,12 @@ emulator:
 
 analyze:
 	$(PY) firmware/packet_analyzer.py --help
+
+flash:
+	./tools/flash.sh
+
+verify:
+	./Backend/scripts/verify_deployment.sh
 
 ci: test backend-test
 	$(PY) -c 'import json; d = json.load(open("WhereDaFlock/Resources/cameras.json")); assert len(d) > 1000; print(f"[✓] {len(d)} cameras validated.")'

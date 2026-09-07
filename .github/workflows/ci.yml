@@ -37,6 +37,10 @@ jobs:
         run: |
           python3 firmware/tests/test_packet_analyzer.py
 
+      - name: Run Signal Math Unit Tests
+        run: |
+          python3 firmware/tests/test_signal_math.py
+
       - name: Python Syntax & Compilation Check
         run: |
           python3 -m py_compile datasets/seed_cameras.py
@@ -44,6 +48,7 @@ jobs:
           python3 -m py_compile api/app.py
           python3 -m py_compile api/flockyou_ble.py
           python3 -m py_compile firmware/packet_analyzer.py
+          python3 -m py_compile firmware/signal_math.py
 
   backend-go-tests:
     name: Go Backend & Spatial Engine Tests

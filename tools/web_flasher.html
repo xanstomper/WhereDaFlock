@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhereDaFlock - Web Firmware Flasher</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #238636;
+    }
+    body {
+      margin: 0;
+      padding: 40px 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 680px;
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    p {
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .badge {
+      background: #1f6feb22;
+      color: #58a6ff;
+      border: 1px solid #1f6feb;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .options {
+      margin: 24px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .option-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      background: #0d111788;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .option-card:hover {
+      border-color: var(--accent);
+    }
+    .title {
+      font-weight: 600;
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+    .desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .steps {
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    .steps ol {
+      padding-left: 20px;
+      margin: 8px 0;
+    }
+    .steps li {
+      margin-bottom: 6px;
+    }
+    esp-web-install-button {
+      --esp-tools-button-border-radius: 6px;
+      --esp-tools-button-color: #238636;
+      --esp-tools-button-text-color: #ffffff;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h1>🛡️ WhereDaFlock Web Flasher <span class="badge">WebSerial</span></h1>
+    <p>
+      Flash your ESP32-S3 microcontroller directly from your Google Chrome, Microsoft Edge, or Chromium browser without installing any drivers or development software.
+    </p>
+
+    <div class="options">
+      <!-- Target 1: Seeed XIAO ESP32-S3 -->
+      <div class="option-card">
+        <div>
+          <div class="title">Seeed Studio XIAO ESP32-S3 (Default)</div>
+          <div class="desc">2.4GHz WiFi Promiscuous Sniffer • Passive probe detection • Buzzer GPIO 3 • LED GPIO 21</div>
+        </div>
+        <div>
+          <esp-web-install-button manifest="manifest_xiao.json">
+            <button slot="activate" style="background:#238636; color:#fff; border:none; padding:8px 16px; border-radius:6px; font-weight:600; cursor:pointer;">
+              Install WiFi Scanner
+            </button>
+          </esp-web-install-button>
+        </div>
+      </div>
+
+      <!-- Target 2: LilyGO T-Dongle-S3 -->
+      <div class="option-card">
+        <div>
+          <div class="title">LilyGO T-Dongle-S3</div>
+          <div class="desc">Integrated 0.96" ST7735 color LCD display • APA102 RGB LED • USB thumb drive format</div>
+        </div>
+        <div>
+          <esp-web-install-button manifest="manifest_lilygo.json">
+            <button slot="activate" style="background:#1f6feb; color:#fff; border:none; padding:8px 16px; border-radius:6px; font-weight:600; cursor:pointer;">
+              Install T-Dongle
+            </button>
+          </esp-web-install-button>
+        </div>
+      </div>
+
+      <!-- Target 3: BLE Beacon Scanner -->
+      <div class="option-card">
+        <div>
+          <div class="title">WhereDaFlock BLE Beacon Scanner</div>
+          <div class="desc">Scans Bluetooth Low Energy advertisements for Flock Company Identifier 0x09C8</div>
+        </div>
+        <div>
+          <esp-web-install-button manifest="manifest_ble.json">
+            <button slot="activate" style="background:#6f42c1; color:#fff; border:none; padding:8px 16px; border-radius:6px; font-weight:600; cursor:pointer;">
+              Install BLE Scanner
+            </button>
+          </esp-web-install-button>
+        </div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <strong>Flashing Instructions:</strong>
+      <ol>
+        <li>Connect your ESP32-S3 board to your computer using a USB-C data cable.</li>
+        <li>Click <strong>Install</strong> on the desired firmware configuration above.</li>
+        <li>Select your device's USB COM port in the popup browser dialog (e.g. <code>ttyACM0</code> or <code>usbmodem</code>).</li>
+        <li>If the device fails to connect, hold down the <strong>BOOT</strong> button on the board, tap <strong>RESET</strong>, and release BOOT to enter ROM download mode.</li>
+        <li>Wait 30 seconds for the flash to finish, then unplug and reconnect the device.</li>
+      </ol>
+    </div>
+  </div>
+
+</body>
+</html>
