@@ -5,11 +5,16 @@ WhereDaFlock - unit tests for the shared detection / confidence logic.
 Verifies the OUI matching and confidence-tier assignment used by both the
 ESP32 firmware (port of the same logic) and the host-side scanner.
 
-Run:  python3 test_detection.py
+Run:  python3 firmware/tests/test_detection.py
 """
 
+import os
 import sys
-sys.path.insert(0, ".")
+
+# Allow running from the repo root OR from firmware/:
+#   python3 firmware/tests/test_detection.py
+#   cd firmware && python3 tests/test_detection.py
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # firmware/
 from host_scanner import (
     classify, is_target_oui, tier_of,
     TIER_ECHO, TIER_OUI, TIER_PROBE, TIER_IE_SIG, TIER_SSID,

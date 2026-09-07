@@ -19,8 +19,18 @@ WhereDaFlock is two things working together:
 |------|-----------|
 | `WhereDaFlock/` | iOS SwiftUI app (map, navigation, community reports, scanner) |
 | `firmware/` | ESP32 passive 2.4GHz Flock Cam detector + host companion |
+| `docs/` | Deep technical docs: detection guide, build guide, hardware, protocol |
 | `Backend/` | Optional Go backend (placeholder) |
 | `WhereDaFlockTests/`, `WhereDaFlockUITests/`, `WhereDaFlockWatch/`, `WhereDaFlockWidgets/` | iOS companion scaffolding |
+
+### Documentation
+
+| Guide | What it covers |
+|-------|----------------|
+| [`docs/DETECTION-GUIDE.md`](docs/DETECTION-GUIDE.md) | Radio protocol, frame anatomy, IE fingerprint, false positives, tuning |
+| [`docs/BUILD-FIRMWARE.md`](docs/BUILD-FIRMWARE.md) | PlatformIO + Arduino build, flashing, pins, troubleshooting |
+| [`docs/HARDWARE.md`](docs/HARDWARE.md) | BOM, wiring, antenna, power, enclosure |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Serial JSON schema + host companion usage |
 
 ---
 
