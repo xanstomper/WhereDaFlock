@@ -1,21 +1,27 @@
-# WhereDaFlock — Flock Cam Passive 2.4GHz Detector
+# WhereDaFlock — Flock Cam Detector Firmware
 
-A **receive-only** detector for Flock Safety ALPR / edge cameras that runs on a
-low-cost ESP32 microcontroller. It sniffs the 2.4GHz WiFi spectrum for the
-wildcard probe requests Flock cameras transmit, matches their transmitter MAC
-against the known Flock OUI set, and assigns a confidence tier. Detections
-stream as JSON over USB/serial, with optional buzzer + LED alerts.
+A pair of **receive-only** detectors for Flock Safety ALPR / edge cameras, both
+running on a low-cost ESP32 microcontroller:
+
+- **`WhereDaFlock_scanner.ino`** — 2.4GHz **WiFi promiscuous** sniffer that
+  detects Flock wildcard probe requests by OUI + IE fingerprint.
+- **`WhereDaFlock_ble.ino`** — **BLE** beacon scanner that detects Flock
+  advertisements by their manufacturer Company Identifier **`0x09C8`**.
+
+Each streams detections as NDJSON over USB/serial with optional buzzer + LED
+alerts, and each has a host-side Python companion.
 
 > **Tagline:** Navigate freely. Stay unseen.
 
 This `firmware/` folder is the dedicated detector companion to the main
 WhereDaFlock app (see the repo root `README.md`).
 
-> ⚠️ **Why 2.4GHz WiFi and not BLE?** Flock cameras historically broadcast a
-> management WiFi AP (deactivated ~Dec 2025) and BLE maintenance beacons
-> (stopped working spring 2026). The current, community-verified method is
-> **passive WiFi probe-request detection**, detailed below. This firmware
-> targets that method.
+> ⚠️ **WiFi vs BLE.** Flock cameras historically broadcast a management WiFi AP
+> (deactivated ~Dec 2025) and BLE maintenance beacons. Today the primary
+> community-verified WiFi signal is **passive probe-request detection** (details
+> below), while a confirmed **BLE** method scans for the `0x09C8` manufacturer
+> ID. WhereDaFlock ships **both**; BLE and WiFi are complementary —
+> running both gives the best coverage.
 
 ---
 
@@ -129,13 +135,43 @@ python3 tests/test_detection.py
 ```
 firmware/
 ├── WhereDaFlock_scanner.ino   # ESP32 WiFi promiscuous detector (main firmware)
+├── WhereDaFlock_ble.ino       # ESP32 BLE beacon scanner (mfr ID 0x09C8)
 ├── src/
-│   └── signatures.h           # Flock OUI list + confidence tiers
-├── host_scanner.py            # cross-platform Python companion (Scapy)
+│   ├── signatures.h           # Flock WiFi OUI list + confidence tiers
+│   └── ble_signatures.h       # Flock BLE signatures (0x09C8, names, UUIDs)
+├── host_scanner.py            # WiFi host companion (Scapy)
+├── ble_scanner.py             # BLE host companion (Bleak)
 ├── tests/
-│   └── test_detection.py      # tests for the shared OUI/tier logic
+│   ├── test_detection.py      # WiFi OUI/tier tests
+│   └── test_ble_detection.py  # BLE mfr-ID/name/UUID tests
+├── platformio.ini             # WiFi env + BLE env targets
+├── partitions.csv
 └── LICENSE                    # MIT
 ```
+
+## BLE beacon scanner
+
+`WhereDaFlock_ble.ino` is the BLE detector. It matches the Flock Safety
+manufacturer Company Identifier **`0x09C8`** (little-endian first 2 bytes of
+the advertisement's manufacturer data) plus advertised-name and service-UUID
+patterns, and emits the same NDJSON stream with `protocol:"ble"`.
+
+Build with PlatformIO:
+
+```bash
+pio run -e xiao_esp32s3_ble -t upload
+```
+
+Host-side BLE scanning (Bleak) + tests:
+
+```bash
+python3 ble_scanner.py --scan 20
+python3 tests/test_ble_detection.py
+```
+
+To validate without a real camera, see
+[`tools/emulator/FlockCam_emulator.ino`](../tools/emulator/FlockCam_emulator.ino)
+(⚠️ test-only beacon that transmits the Flock mfr ID; bench use only).
 
 ---
 
@@ -148,6 +184,10 @@ firmware/
 - **colonelpanichacks** — [flock-you](https://github.com/colonelpanichacks/flock-you)
   firmware this detection pipeline is modeled on.
 - **nsm_barii** — observation of the camera's probe hop timing.
+- **@wgreenberg** — Flock Safety BLE manufacturer Company Identifier **`0x09C8`**
+  detection research (basis of the `0x09C8` scans in this repo).
+- **LuxStatera** — [flock-hunter-cyd-ble](https://github.com/LuxStatera/flock-hunter-cyd-ble),
+  the BLE `0x09C8` detector + emulator this path draws from.
 
 ---
 

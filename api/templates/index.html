@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhereDaFlock Dashboard</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --a:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 20px;
+           border-bottom:1px solid var(--border); background:var(--panel); }
+  header h1 { font-size:18px; margin:0; }
+  .badge { font-size:11px; padding:3px 8px; border-radius:10px; margin-left:8px; }
+  .b-wifi{ background:#1f6feb; } .b-ble{ background:#238636; }
+  main { padding:20px; display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:800px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; }
+  .card h2 { font-size:14px; margin:0 0 10px; color:#8b949e; text-transform:uppercase; letter-spacing:.5px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
+  th { color:#8b949e; font-weight:600; }
+  tr.det:hover { background:#1c2128; }
+  .tag { font-size:10px; padding:2px 6px; border-radius:8px; }
+  .t-likely{ background:#238636; } .t-poss{ background:#9e6a03; } .t-cand{ background:#57606a; }
+  button { background:#21262d; color:var(--fg); border:1px solid var(--border);
+           border-radius:6px; padding:6px 12px; cursor:pointer; }
+  button:hover { background:#30363d; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  select,input { background:#21262d; color:var(--fg); border:1px solid var(--border);
+                 border-radius:6px; padding:6px; }
+  #list { max-height:500px; overflow-y:auto; }
+  #summary { display:flex; gap:20px; }
+  #summary b { font-size:26px; display:block; }
+  .empty { color:#57606a; font-style:italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ WhereDaFlock <span class="badge b-wifi">WiFi</span><span class="badge b-ble">BLE</span></h1>
+  <div id="summary">
+    <div><b id="cTotal">0</b><span>total</span></div>
+    <div><b id="cLikely">0</b><span>likely Flock</span></div>
+    <div><b id="cGps">off</b><span id="gpsLabel">GPS</span></div>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Sources</h2>
+    <div class="row">
+      <label>Serial port</label>
+      <select id="ports"></select>
+      <button onclick="connectSerial()">Connect</button>
+      <button onclick="disconnectSerial()">Disconnect</button>
+    </div>
+    <div class="row">
+      <label>GPS</label>
+      <select id="gpsMode"><option value="off">Off</option><option value="serial">Serial NMEA</option><option value="gpsd">gpsd</option></select>
+      <input id="gpsPort" placeholder="/dev/ttyUSB1" size="14">
+      <button onclick="connectGps()">Connect GPS</button>
+    </div>
+    <div class="row">
+      <button onclick="exportCsv()">Export CSV</button>
+      <button onclick="exportKml()">Export KML</button>
+      <button onclick="clearAll()">Clear</button>
+      <a id="csvLink" hidden></a>
+    </div>
+    <p style="font-size:12px;color:#8b949e">Feed JSON to <code>POST /api/detections</code>, or connect a
+       WhereDaFlock WiFi/BLE ESP32 over serial (NDJSON @ 115200).</p>
+  </section>
+
+  <section class="card">
+    <h2>Live detections</h2>
+    <table>
+      <thead><tr><th>MAC</th><th>Name</th><th>RSSI</th><th>Method</th><th>Protocol</th><th></th></tr></thead>
+      <tbody id="list"></tbody>
+    </table>
+    <p class="empty" id="empty">No detections yet.</p>
+  </section>
+</main>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+const socket = io();
+const listEl = document.getElementById("list");
+const emptyEl = document.getElementById("empty");
+let dets = [];
+
+function tag(v){ return v==='FLOCK_LIKELY'?'t-likely':(v==='FLOCK_POSSIBLE'?'t-poss':'t-cand'); }
+
+function render(){
+  listEl.innerHTML = dets.slice(0,300).map(d => `
+    <tr class="det">
+      <td>${d.mac||''}</td><td>${d.name||''}</td>
+      <td>${d.rssi!=null?d.rssi+' dBm':''}</td>
+      <td>${d.method||''}</td>
+      <td>${d.protocol||''}</td>
+      <td><span class="tag ${tag(d.verdict)}">${d.verdict||''}</span></td>
+    </tr>`).join("");
+  emptyEl.hidden = dets.length>0;
+  document.getElementById("cTotal").textContent = dets.length;
+  document.getElementById("cLikely").textContent = dets.filter(d=>d.verdict==='FLOCK_LIKELY').length;
+}
+socket.on("detection", d => { dets.unshift(d); if(dets.length>500) dets.pop(); render(); });
+socket.on("cleared", () => { dets=[]; render(); });
+
+async function loadPorts(){
+  try{
+    const r = await fetch("/api/serial/ports");
+    const ports = await r.json();
+    if(Array.isArray(ports)){
+      const sel = document.getElementById("ports");
+      sel.innerHTML = ports.map(p=>`<option value="${p.device}">${p.device} — ${p.description||''}</option>`).join("");
+    }
+  }catch(e){}
+}
+async function connectSerial(){
+  const port = document.getElementById("ports").value;
+  if(!port) return;
+  await fetch("/api/serial/connect", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({port})});
+}
+async function disconnectSerial(){ await fetch("/api/serial/disconnect",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); }
+async function connectGps(){
+  const mode = document.getElementById("gpsMode").value;
+  const port = document.getElementById("gpsPort").value;
+  const body = mode==="gpsd" ? {source:"gpsd"} : {source:"serial", port};
+  await fetch("/api/gps/connect",{method:"POST",headers:{"Content-Type":"application/json"},body: JSON.stringify(body)});
+  const g = await (await fetch("/api/gps")).json();
+  document.getElementById("gpsLabel").textContent = g.source;
+}
+async function exportCsv(){
+  const a = document.getElementById("csvLink");
+  a.href = "/api/export/csv"; a.download=""; a.click();
+}
+async function exportKml(){ window.open("/api/export/kml","_blank"); }
+async function clearAll(){ await fetch("/api/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); }
+
+window.addEventListener("DOMContentLoaded", ()=>{ loadPorts(); loadHistory(); });
+async function loadHistory(){
+  try{
+    const r = await fetch("/api/detections");
+    const arr = await r.json();
+    if(Array.isArray(arr)){ dets = arr.reverse(); render(); }
+  }catch(e){}
+}
+</script>
+</body>
+</html>

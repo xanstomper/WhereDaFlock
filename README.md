@@ -18,7 +18,9 @@ WhereDaFlock is two things working together:
 | Path | What it is |
 |------|-----------|
 | `WhereDaFlock/` | iOS SwiftUI app (map, navigation, community reports, scanner) |
-| `firmware/` | ESP32 passive 2.4GHz Flock Cam detector + host companion |
+| `firmware/` | ESP32 detectors: **WiFi** promiscuous + **BLE** beacon scanner + host companions |
+| `api/` | Flask dashboard: real-time ingest, GPS, CSV/KML export |
+| `tools/emulator/` | Flock Cam BLE test beacon (validates your detector) |
 | `docs/` | Deep technical docs: detection guide, build guide, hardware, protocol |
 | `Backend/` | Optional Go backend (placeholder) |
 | `WhereDaFlockTests/`, `WhereDaFlockUITests/`, `WhereDaFlockWatch/`, `WhereDaFlockWidgets/` | iOS companion scaffolding |
@@ -27,10 +29,11 @@ WhereDaFlock is two things working together:
 
 | Guide | What it covers |
 |-------|----------------|
-| [`docs/DETECTION-GUIDE.md`](docs/DETECTION-GUIDE.md) | Radio protocol, frame anatomy, IE fingerprint, false positives, tuning |
+| [`docs/DETECTION-GUIDE.md`](docs/DETECTION-GUIDE.md) | WiFi: radio protocol, frame anatomy, IE fingerprint, false positives, tuning |
+| [`docs/BLE-GUIDE.md`](docs/BLE-GUIDE.md) | BLE: `0x09C8` manufacturer-ID method, name/UUID signals, emulator |
 | [`docs/BUILD-FIRMWARE.md`](docs/BUILD-FIRMWARE.md) | PlatformIO + Arduino build, flashing, pins, troubleshooting |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | BOM, wiring, antenna, power, enclosure |
-| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Serial JSON schema + host companion usage |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Serial NDJSON schema + host companions |
 
 ---
 
@@ -153,6 +156,55 @@ Every detection streams as one JSON line over USB/serial (115200 baud):
 ```
 
 While any tier-4 device stays in range, a heartbeat beep repeats every ~10 s.
+
+---
+
+## 🔵 The BLE beacon scanner (how it works)
+
+Flock cameras *also* broadcast **BLE advertisements** carrying the Flock
+Safety manufacturer Company Identifier **`0x09C8`** (registered to XUNTONG).
+This is a complementary, and often more convenient, detection path than WiFi —
+especially indoors or when the WiFi (probe) radio is quiet.
+
+`firmware/WhereDaFlock_ble.ino` passively scans BLE advertisements and scores
+them:
+
+| Signal | Weight | Notes |
+|--------|--------|-------|
+| **Manufacturer ID `0x09C8`** | 70 | decisive Flock signal (little-endian first 2 bytes of mfr data) |
+| **Advertised name** (`FS Ext Battery`, `Flock`, `Penguin`, ...) | 45 | strong substring match |
+| **Service UUID** (Device Info, Battery, location/nav, companion services) | 20 | weak supporting signal |
+
+Confidence thresholds: `≥60` = `FLOCK_LIKELY`, `≥30` = `FLOCK_POSSIBLE`, else
+`CANDIDATE`. Detections stream as JSON (`protocol:"ble"`, `method:"mfr_id"`),
+with buzzer + LED alerts.
+
+The repo ships everything around it:
+
+- `firmware/ble_scanner.py` — host-side BLE scanner (Bleak) mirroring the logic.
+- `firmware/tests/test_ble_detection.py` — unit tests (all passing).
+- `tools/emulator/FlockCam_emulator.ino` — a **test-only** beacon that advertises
+  `0x09C8` so you can validate a detector on your bench without a real camera
+  (⚠️ transmits; dev/bench use only).
+- `api/` — the dashboard ingests both `wifi_2_4ghz` and `ble` detections.
+
+### BLE quick start
+
+```bash
+cd firmware
+pio run -e xiao_esp32s3 -t upload     # build WhereDaFlock_ble.ino target
+pio device monitor
+
+# or on a host with a Bluetooth adapter:
+python3 ble_scanner.py --scan 20
+python3 tests/test_ble_detection.py
+```
+
+For a self-test, flash the emulator onto a **second** ESP32, power it a couple
+meters away, and confirm the BLE detector reports a `FLOCK_LIKELY` `mfr_id` hit.
+
+> BLE and WiFi are complementary. Running **both** `WhereDaFlock_ble.ino` and
+> `WhereDaFlock_scanner.ino` (or the host companions) gives the best coverage.
 
 ---
 
