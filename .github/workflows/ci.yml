@@ -23,7 +23,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest scapy flask requests
+          pip install flake8 pytest scapy flask flask-socketio requests
 
       - name: Run WiFi Detection Tier Unit Tests
         run: |
@@ -41,6 +41,14 @@ jobs:
         run: |
           python3 firmware/tests/test_signal_math.py
 
+      - name: Run Deep IE Decoder Unit Tests
+        run: |
+          python3 firmware/tests/test_ie_decode.py
+
+      - name: Run Pcap Batch Aggregator Unit Tests
+        run: |
+          python3 firmware/tests/test_analyze_batch.py
+
       - name: Python Syntax & Compilation Check
         run: |
           python3 -m py_compile datasets/seed_cameras.py
@@ -48,7 +56,13 @@ jobs:
           python3 -m py_compile api/app.py
           python3 -m py_compile api/flockyou_ble.py
           python3 -m py_compile firmware/packet_analyzer.py
+          python3 -m py_compile firmware/ie_decode.py
+          python3 -m py_compile firmware/analyze_batch.py
           python3 -m py_compile firmware/signal_math.py
+
+      - name: Dashboard Import / OUI Smoke Test
+        run: |
+          cd api && python3 -c "import app as m; assert len(m.OUI_DATABASE) > 0, 'OUI DB empty'; print('[ok]', len(m.OUI_DATABASE), 'OUI entries'); print('[ok] BLE blueprint registered')"
 
   backend-go-tests:
     name: Go Backend & Spatial Engine Tests
