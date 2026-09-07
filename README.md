@@ -894,6 +894,10 @@ The repository bundles field-verified Wardriving datasets and reference database
 2. **First Amendment & Public Surveillance Documentation:** Documenting or mapping surveillance devices placed in public view on municipal easements and public roadways is protected activity under the First Amendment of the United States Constitution.
 3. **Safety First:** Never interact with phone touchscreens or read raw serial monitors while actively operating a motor vehicle. Rely exclusively on hands-free audible cues and voice navigation prompts.
 
+4. **Lawful learning:** For a fuller framework on studying this technology legally —
+   the passive-reception baseline, isolated-lab practice, the transmit boundary,
+   and authoritative references — see [`docs/RESEARCH-ETHICS.md`](docs/RESEARCH-ETHICS.md).
+
 ---
 
 <p align="center">
