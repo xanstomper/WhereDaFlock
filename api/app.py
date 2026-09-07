@@ -104,16 +104,31 @@ def api_clear():
 # ---------------------------------------------------------------------------
 # Serial ingest (WiFi and BLE ESP32 detectors)
 # ---------------------------------------------------------------------------
+SERIAL_THREADS = {}
+SERIAL_PARTS = {}   # port -> serial.Serial (for device-control commands)
+
+
+def _send_device_command(cmd: str):
+    """Write one JSON command line to all attached ESP32 detectors (best-effort)."""
+    for port, ser in list(SERIAL_PARTS.items()):
+        try:
+            ser.write((cmd + "\n").encode("ascii"))
+            ser.flush()
+        except Exception as exc:
+            print(f"[wdf-dash] command to {port} failed: {exc}")
+
+
 def _serial_reader(port, baud=115200):
     """Read NDJSON lines from an ESP32 and ingest each detection."""
     ser = serial.Serial(port, baud, timeout=1)
+    SERIAL_PARTS[port] = ser
     print(f"[wdf-dash] listening on {port} @ {baud}")
     try:
         while True:
             try:
                 line = ser.readline().decode("utf-8", errors="ignore").strip()
             except Exception:
-                continue
+                break
             if not line or not line.startswith("{"):
                 continue
             try:
@@ -125,8 +140,12 @@ def _serial_reader(port, baud=115200):
                 _ingest({**data, "source": "serial"})
     except Exception as exc:
         print(f"[wdf-dash] serial loop ended: {exc}")
-
-SERIAL_THREADS = {}
+    finally:
+        SERIAL_PARTS.pop(port, None)
+        try:
+            ser.close()
+        except Exception:
+            pass
 
 
 @app.get("/api/serial/ports")
@@ -158,9 +177,45 @@ def serial_connect():
 def serial_disconnect():
     port = (request.json or {}).get("port")
     if port and port in SERIAL_THREADS:
-        # thread exits when its read fails after disconnect; just drop ref
         SERIAL_THREADS.pop(port, None)
+        ser = SERIAL_PARTS.pop(port, None)
+        if ser:
+            try:
+                ser.close()
+            except Exception:
+                pass
     return jsonify({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Device control (per-tier audio mute + offline session pull) — mirrors the
+# flock-you dashboard control plane over the same USB CDC link as detections.
+# ---------------------------------------------------------------------------
+@app.get("/api/watch/config")
+def watch_config():
+    _send_device_command('{"cmd":"get_config"}')
+    return jsonify({"status": "ok", "message": "asked device to re-report"})
+
+
+@app.post("/api/watch/beep")
+def watch_beep():
+    body = request.get_json(force=True) or {}
+    if "mask" in body:
+        mask = int(body["mask"])
+        _send_device_command(f'{{"cmd":"set_beep_mask","mask":{mask}}}')
+        return jsonify({"status": "ok", "mask": mask})
+    tier = int(body.get("tier", 0))
+    on = 1 if body.get("on") else 0
+    _send_device_command(f'{{"cmd":"set_beep","tier":{tier},"on":{on}}}')
+    return jsonify({"status": "ok", "tier": tier, "on": on})
+
+
+@app.post("/api/watch/dump_session")
+def watch_dump():
+    body = request.get_json(force=True) or {}
+    source = body.get("source", "live")
+    _send_device_command(f'{{"cmd":"dump_session","source":"{source}"}}')
+    return jsonify({"status": "ok", "source": source})
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +228,9 @@ _GPS = {"lat": None, "lon": None, "source": "off"}
 def gps_connect():
     body = request.get_json(force=True) or {}
     source = body.get("source", "serial")
+    if source == "browser":
+        _GPS["source"] = "browser"
+        return jsonify({"status": "ok"})
     if source == "gpsd":
         host = body.get("host", "localhost")
         port = int(body.get("port", 2947))
@@ -185,6 +243,18 @@ def gps_connect():
     socketio.start_background_task(_nmea_loop, port)
     _GPS["source"] = "serial"
     return jsonify({"status": "ok"})
+
+
+@app.post("/api/gps/browser")
+def gps_browser():
+    """Accept position from the browser Geolocation API (flock-you option 3)."""
+    body = request.get_json(force=True) or {}
+    if body.get("lat") is not None and body.get("lon") is not None:
+        _GPS["lat"] = float(body["lat"])
+        _GPS["lon"] = float(body["lon"])
+        _GPS["source"] = "browser"
+        return jsonify({"status": "ok"})
+    return jsonify({"error": "lat/lon required"}), 400
 
 
 @app.post("/api/gps/disconnect")

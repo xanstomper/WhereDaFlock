@@ -138,7 +138,8 @@ firmware/
 ├── WhereDaFlock_ble.ino       # ESP32 BLE beacon scanner (mfr ID 0x09C8)
 ├── src/
 │   ├── signatures.h           # Flock WiFi OUI list + confidence tiers
-│   └── ble_signatures.h       # Flock BLE signatures (0x09C8, names, UUIDs)
+│   ├── ble_signatures.h       # Flock BLE signatures (0x09C8, names, UUIDs)
+│   └── session.h              # SPIFFS persistence + NVS beep mask + host commands
 ├── host_scanner.py            # WiFi host companion (Scapy)
 ├── ble_scanner.py             # BLE host companion (Bleak)
 ├── tests/
@@ -172,6 +173,26 @@ python3 tests/test_ble_detection.py
 To validate without a real camera, see
 [`tools/emulator/FlockCam_emulator.ino`](../tools/emulator/FlockCam_emulator.ino)
 (⚠️ test-only beacon that transmits the Flock mfr ID; bench use only).
+
+## Standalone persistence & device control (WiFi firmware)
+
+Pulled from flock-you's on-device features (`src/session.h`):
+
+- **SPIFFS session persistence** — every 60 s the unique-BY-MAC detection table
+  is saved to `/session.json` (atomic tmp→rename). On boot any prior session is
+  promoted to `/prev_session.json` so an offline run is preserved intact.
+- **NVS per-tier audio mute** — the `wdfBeepMask` (bits 0–4) is stored in NVS
+  and survives power cycles. `tierAudible()` honors it.
+- **USB-CDC host command channel** — the dashboard (or any host) can send one
+  JSON command per line:
+  - `{"cmd":"get_config"}` → device re-emits its config JSON
+  - `{"cmd":"set_beep","tier":N,"on":0|1}` → mute/unmute one tier
+  - `{"cmd":"set_beep_mask","mask":0-31}` → set all tiers at once
+  - `{"cmd":"dump_session","source":"live"|"prev"}` → stream the offline table
+  - `{"cmd":"clear_session"}` → clear the on-device table
+
+The dashboard (`api/`) exposes these as `/api/watch/*` endpoints and a
+per-tier Audio panel in the UI.
 
 ---
 

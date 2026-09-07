@@ -28,6 +28,7 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include "src/signatures.h"
+#include "src/session.h"
 
 using namespace WhereDaFlock;
 
@@ -56,9 +57,33 @@ using namespace WhereDaFlock;
 #define ALERT_QUEUE_SIZE   32
 #define BEEP_MASK_DEFAULT  0x1F  // all five tiers audible by default
 
-// Channels: descending order matches the cameras' ascending hop for faster catch.
+// ---------------------------------------------------------------------------
+// Channel hopping. "Descending" order matches the cameras' ascending hop for
+// faster catch. Select a mode with CHANNEL_MODE:
+//   0 = FULL_HOP  (11..1, descending)
+//   1 = CUSTOM    (11/6/1 descending, default)
+//   2 = SINGLE    (stay on SINGLE_CHANNEL)
+// ---------------------------------------------------------------------------
+#define CHANNEL_MODE_CUSTOM   1
+#define CHANNEL_MODE_FULL_HOP 0
+#define CHANNEL_MODE_SINGLE   2
+#ifndef CHANNEL_MODE
+#define CHANNEL_MODE CHANNEL_MODE_CUSTOM
+#endif
+#ifndef CHANNEL_DWELL_MS
+#define CHANNEL_DWELL_MS 250    // 2x the observed 125ms camera hop
+#endif
+#ifndef SINGLE_CHANNEL
+#define SINGLE_CHANNEL 1
+#endif
+
 static const uint8_t customChannels[] = {11, 6, 1};
 static constexpr size_t customChannelCount = sizeof(customChannels)/sizeof(customChannels[0]);
+static const uint8_t fullHopChannels[] = {11,10,9,8,7,6,5,4,3,2,1};
+static constexpr size_t fullHopChannelCount = sizeof(fullHopChannels)/sizeof(fullHopChannels[0]);
+
+static const uint8_t* activeChannels = customChannels;
+static size_t         activeChannelCount = customChannelCount;
 
 // Audio cadence per tier (distinct so you can identify by ear).
 #define T4_LO_HZ 2000
@@ -119,18 +144,11 @@ static volatile size_t alertHead = 0, alertTail = 0;
 static portMUX_TYPE queueMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Detection table (unique by MAC, best tier retained).
-typedef struct {
-  char     mac[18];
-  char     method[24];
-  uint8_t  tier;
-  int8_t   rssi;
-  uint8_t  channel;
-  uint32_t firstSeen, lastSeen;
-  uint16_t count;
-  char     ssid[33];
-} FYDetection;
-static FYDetection fyDet[MAX_DETECTIONS];
-static int  fyDetCount = 0;
+// Defined here at GLOBAL scope with external linkage to match the extern
+// declarations in src/session.h, so the SPIFFS persistence + host-command
+// module operates on the same table.
+WDFDetection wdfDet[WDF_MAX_DETECTIONS];
+int          wdfDetCount = 0;
 
 // Dedupe/serial-rate-limit table (suppresses beep+emit, allows tier upgrades).
 static struct {
@@ -143,7 +161,9 @@ static size_t dedupeIdx = 0;
 static volatile unsigned long ledOffAt = 0;
 static unsigned long fyLastTargetSeen = 0, fyLastHeartbeatAt = 0;
 static uint8_t fyLastTargetTier = 0;
-static volatile uint8_t fyBeepMask = BEEP_MASK_DEFAULT;
+// wdfBeepMask is defined here and declared extern in src/session.h (for the
+// NVS-backed per-tier audio mute). Default: all five tiers audible.
+volatile uint8_t wdfBeepMask = BEEP_MASK_DEFAULT;
 
 // ---------------------------------------------------------------------------
 // LED / buzzer helpers
@@ -159,7 +179,7 @@ static void ledTick() {
   if (ledOffAt && (long)(millis() - ledOffAt) >= 0) { ledSet(false); ledOffAt = 0; }
 }
 static inline bool tierAudible(uint8_t tier) {
-  return tier < TIER_COUNT && ((fyBeepMask >> tier) & 0x01);
+  return tier < TIER_COUNT && ((wdfBeepMask >> tier) & 0x01);
 }
 static void blip(uint16_t hz) { tone(BUZZER_PIN, hz); delay(BLIP_MS); noTone(BUZZER_PIN); }
 static void chirp2(uint16_t lo, uint16_t hi) {
@@ -328,31 +348,31 @@ static bool shouldSuppressDuplicate(const char* macStr, uint8_t tier) {
 static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
                           int8_t rssi, uint8_t ch, bool* outChirpWorthy) {
   uint32_t now = millis();
-  for (int i = 0; i < fyDetCount; i++) {
-    if (strcmp(fyDet[i].mac, mac) == 0) {
-      bool rediscover = (now - fyDet[i].lastSeen) > REDISCOVER_MS;
-      if (fyDet[i].count < 0xFFFF) fyDet[i].count++;
-      fyDet[i].lastSeen = now;
-      fyDet[i].rssi = rssi;
-      fyDet[i].channel = ch;
-      bool upgrade = tier > fyDet[i].tier;
+  for (int i = 0; i < wdfDetCount; i++) {
+    if (strcmp(wdfDet[i].mac, mac) == 0) {
+      bool rediscover = (now - wdfDet[i].lastSeen) > REDISCOVER_MS;
+      if (wdfDet[i].count < 0xFFFF) wdfDet[i].count++;
+      wdfDet[i].lastSeen = now;
+      wdfDet[i].rssi = rssi;
+      wdfDet[i].channel = ch;
+      bool upgrade = tier > wdfDet[i].tier;
       if (upgrade) {
-        fyDet[i].tier = tier;
-        strlcpy(fyDet[i].method, method ? method : "", sizeof(fyDet[i].method));
+        wdfDet[i].tier = tier;
+        strlcpy(wdfDet[i].method, method ? method : "", sizeof(wdfDet[i].method));
       }
       if (outChirpWorthy) *outChirpWorthy = rediscover || upgrade;
       return i;
     }
   }
-  if (fyDetCount >= MAX_DETECTIONS) { if (outChirpWorthy) *outChirpWorthy = false; return -1; }
-  FYDetection& d = fyDet[fyDetCount];
+  if (wdfDetCount >= MAX_DETECTIONS) { if (outChirpWorthy) *outChirpWorthy = false; return -1; }
+  WDFDetection& d = wdfDet[wdfDetCount];
   strlcpy(d.mac, mac, sizeof(d.mac));
   strlcpy(d.method, method ? method : "", sizeof(d.method));
   d.tier = tier; d.rssi = rssi; d.channel = ch;
   d.firstSeen = d.lastSeen = now; d.count = 1; d.ssid[0] = '\0';
-  fyDetCount++;
+  wdfDetCount++;
   if (outChirpWorthy) *outChirpWorthy = true;
-  return fyDetCount - 1;
+  return wdfDetCount - 1;
 }
 
 // JSON-emit one detection line (manual, compact).
@@ -396,11 +416,19 @@ static void drainAlertQueue() {
 }
 
 static void updateChannelMode() {
+#if CHANNEL_MODE == CHANNEL_MODE_SINGLE
+  if (currentChannel != SINGLE_CHANNEL) {
+    currentChannel = SINGLE_CHANNEL;
+    esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+  }
+  return;
+#else
   if (millis() - lastHop < CHANNEL_DWELL_MS) return;
-  chanIdx = (chanIdx + 1) % customChannelCount;
-  currentChannel = customChannels[chanIdx];
+  chanIdx = (chanIdx + 1) % activeChannelCount;
+  currentChannel = activeChannels[chanIdx];
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   lastHop = millis();
+#endif
 }
 
 static void heartbeatTick() {
@@ -408,6 +436,58 @@ static void heartbeatTick() {
   if (millis() - fyLastHeartbeatAt >= HB_BEEP_INTERVAL_MS) {
     fyLastHeartbeatAt = millis();
     if (tierAudible(fyLastTargetTier)) heartbeatBeep();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Host command channel (USB CDC input). The dashboard sends one JSON command
+// per line when it wants to mute tiers or pull an offline session.
+//   {"cmd":"get_config"}
+//   {"cmd":"set_beep","tier":N,"on":0|1}
+//   {"cmd":"set_beep_mask","mask":0-31}
+//   {"cmd":"dump_session","source":"live"|"prev"}
+//   {"cmd":"clear_session"}
+// ---------------------------------------------------------------------------
+static char cmdBuf[128];
+static size_t cmdLen = 0;
+
+static void handleHostCommands() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (cmdLen > 0) {
+        cmdBuf[cmdLen] = '\0';
+        String cmd = String(cmdBuf);
+
+        if (cmd.indexOf("get_config") >= 0) {
+          WhereDaFlockSession::emitConfigJSON();
+        } else if (cmd.indexOf("set_beep_mask") >= 0) {
+          int mask = cmd.substring(cmd.indexOf("mask\":") + 6).toInt();
+          if (mask >= 0 && mask < 32) {
+            wdfBeepMask = (uint8_t)mask;
+            WhereDaFlockSession::saveBeepMask();
+            WhereDaFlockSession::emitConfigJSON();
+          }
+        } else if (cmd.indexOf("set_beep") >= 0) {
+          int tier = cmd.substring(cmd.indexOf("tier\":") + 6).toInt();
+          bool on = cmd.indexOf("\"on\":1") >= 0;
+          if (tier >= 0 && tier < TIER_COUNT) {
+            if (on) wdfBeepMask |= (1 << tier); else wdfBeepMask &= ~(1 << tier);
+            WhereDaFlockSession::saveBeepMask();
+            WhereDaFlockSession::emitConfigJSON();
+          }
+        } else if (cmd.indexOf("dump_session") >= 0) {
+          bool prev = cmd.indexOf("\"source\":\"prev\"") >= 0;
+          WhereDaFlockSession::dumpSession(prev ? "prev" : "live");
+        } else if (cmd.indexOf("clear_session") >= 0) {
+          wdfDetCount = 0;
+          Serial.println("{\"event\":\"cleared\"}");
+        }
+        cmdLen = 0;
+      }
+    } else if (cmdLen < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdLen++] = c;
+    }
   }
 }
 
@@ -430,9 +510,14 @@ void setup() {
     oui_bytes[i][2] = (uint8_t)strtol(TARGET_OUIS[i] + 6, NULL, 16);
   }
 
-  Serial.println("WhereDaFlock v2.0.0 - passive 2.4GHz Flock Cam detector");
+  Serial.println("WhereDaFlock v2.1.0 - passive 2.4GHz Flock Cam detector");
   Serial.println("RECEIVE-ONLY promiscuous mode. No transmissions.");
   Serial.printf("Targeting %u Flock OUIs (%s)\n", (unsigned)OUI_COUNT, __DATE__);
+
+  // Session + control plane (SPIFFS persistence, NVS beep mask, boot recovery).
+  WhereDaFlockSession::loadBeepMask();
+  if (SPIFFS.begin(true)) WhereDaFlockSession::promotePrevSession();
+  WhereDaFlockSession::emitConfigJSON();
 
   // Enable promiscuous mode over the STA radio (receive-only; we never
   // associate to a network, so no connection is ever made).
@@ -443,22 +528,41 @@ void setup() {
   f.filter_mask = WIFI_PROMIS_FILTER_MASK_ALL;
   esp_wifi_set_promiscuous_filter(&f);
 
-  currentChannel = customChannels[0];
+#if CHANNEL_MODE == CHANNEL_MODE_SINGLE
+  (void)activeChannels; (void)activeChannelCount;
+  currentChannel = SINGLE_CHANNEL;
+#elif CHANNEL_MODE == CHANNEL_MODE_FULL_HOP
+  activeChannels = fullHopChannels;
+  activeChannelCount = fullHopChannelCount;
+  currentChannel = activeChannels[0];
+#else
+  activeChannels = customChannels;
+  activeChannelCount = customChannelCount;
+  currentChannel = activeChannels[0];
+#endif
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   lastHop = millis();
 
-  Serial.println("Scanning channels 11/6/1 ...");
+  Serial.println("Scanning ...");
 }
 
 void loop() {
   drainAlertQueue();
   updateChannelMode();
   heartbeatTick();
+  handleHostCommands();          // dashboard control plane (USB CDC)
   ledTick();
   delay(1);
 
   if (millis() - fyLastHeartbeatAt >= HEARTBEAT_MS) {
     fyLastHeartbeatAt = millis();
-    Serial.printf("[wdf] scanning ch=%u det=%d\n", currentChannel, fyDetCount);
+    Serial.printf("[wdf] scanning ch=%u det=%d\n", currentChannel, wdfDetCount);
+  }
+
+  // Autosave session to SPIFFS every 60s when the table changed.
+  static unsigned long lastSaveAt = 0;
+  if (millis() - lastSaveAt >= 60000) {
+    lastSaveAt = millis();
+    WhereDaFlockSession::saveSession();
   }
 }

@@ -56,7 +56,7 @@
     </div>
     <div class="row">
       <label>GPS</label>
-      <select id="gpsMode"><option value="off">Off</option><option value="serial">Serial NMEA</option><option value="gpsd">gpsd</option></select>
+      <select id="gpsMode"><option value="off">Off</option><option value="serial">Serial NMEA</option><option value="gpsd">gpsd</option><option value="browser">Browser</option></select>
       <input id="gpsPort" placeholder="/dev/ttyUSB1" size="14">
       <button onclick="connectGps()">Connect GPS</button>
     </div>
@@ -64,10 +64,23 @@
       <button onclick="exportCsv()">Export CSV</button>
       <button onclick="exportKml()">Export KML</button>
       <button onclick="clearAll()">Clear</button>
-      <a id="csvLink" hidden></a>
+    </div>
+    <h2>Device control (attached ESP32)</h2>
+    <div class="row">
+      <label>Per-tier audio</label>
+      <button onclick="setTier(4)">T4 IE</button>
+      <button onclick="setTier(3)">T3 probe</button>
+      <button onclick="setTier(2)">T2 OUI</button>
+      <button onclick="setTier(1)">T1 echo</button>
+      <button onclick="setTier(0)">T0 ssid</button>
+      <button onclick="askConfig()">Config</button>
+      <button onclick="dumpSession('live')">Pull live</button>
+      <button onclick="dumpSession('prev')">Pull prev</button>
     </div>
     <p style="font-size:12px;color:#8b949e">Feed JSON to <code>POST /api/detections</code>, or connect a
-       WhereDaFlock WiFi/BLE ESP32 over serial (NDJSON @ 115200).</p>
+       WhereDaFlock WiFi/BLE ESP32 over serial (NDJSON @ 115200). Per-tier buttons
+       mute that tier's buzzer on the device; mute persists across power cycles
+       (NVS).</p>
   </section>
 
   <section class="card">
@@ -125,17 +138,28 @@ async function disconnectSerial(){ await fetch("/api/serial/disconnect",{method:
 async function connectGps(){
   const mode = document.getElementById("gpsMode").value;
   const port = document.getElementById("gpsPort").value;
+  if(mode === "browser"){
+    await fetch("/api/gps/connect",{method:"POST",headers:{"Content-Type":"application/json"},body: JSON.stringify({source:"browser"})});
+    if(navigator.geolocation){
+      navigator.geolocation.watchPosition(async pos => {
+        await fetch("/api/gps/browser",{method:"POST",headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({lat:pos.coords.latitude,lon:pos.coords.longitude})});
+        document.getElementById("gpsLabel").textContent = "browser";
+      }, e=>alert("Geolocation error: "+e.message), {enableHighAccuracy:true});
+    }
+    return;
+  }
   const body = mode==="gpsd" ? {source:"gpsd"} : {source:"serial", port};
   await fetch("/api/gps/connect",{method:"POST",headers:{"Content-Type":"application/json"},body: JSON.stringify(body)});
   const g = await (await fetch("/api/gps")).json();
   document.getElementById("gpsLabel").textContent = g.source;
 }
-async function exportCsv(){
-  const a = document.getElementById("csvLink");
-  a.href = "/api/export/csv"; a.download=""; a.click();
-}
+async function exportCsv(){ window.open("/api/export/csv","_blank"); }
 async function exportKml(){ window.open("/api/export/kml","_blank"); }
 async function clearAll(){ await fetch("/api/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); }
+async function setTier(tier){ await fetch("/api/watch/beep",{method:"POST",headers:{"Content-Type":"application/json"},body: JSON.stringify({tier})}); }
+async function askConfig(){ await fetch("/api/watch/config"); }
+async function dumpSession(source){ await fetch("/api/watch/dump_session",{method:"POST",headers:{"Content-Type":"application/json"},body: JSON.stringify({source})}); }
 
 window.addEventListener("DOMContentLoaded", ()=>{ loadPorts(); loadHistory(); });
 async function loadHistory(){
