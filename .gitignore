@@ -14,3 +14,6 @@ DerivedData/
 # Build
 build/
 dist/
+Backend/bin/
+wheredaflock-server
+*.log

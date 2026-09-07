@@ -30,6 +30,7 @@
 #include "src/signatures.h"
 #include "src/session.h"
 #include "src/display_dongle.h"
+#include "src/ble_telemetry.h"
 
 using namespace WhereDaFlock;
 
@@ -393,14 +394,18 @@ static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
   return wdfDetCount - 1;
 }
 
-// JSON-emit one detection line (manual, compact).
+// JSON-emit one detection line (manual, compact) and broadcast via BLE.
 static void emitDetectionJSON(const char* mac, const char* method, uint8_t tier,
                               int8_t rssi, uint8_t ch) {
-  Serial.printf("{\"event\":\"detection\",\"detection_method\":\"wifi_%s\","
-                "\"detection_tier\":%u,\"protocol\":\"wifi_2_4ghz\","
-                "\"mac_address\":\"%s\",\"rssi\":%d,\"channel\":%u,"
-                "\"frequency\":%u,\"ssid\":\"\"}\n",
-                method, (unsigned)tier, mac, rssi, (unsigned)ch, (unsigned)(2407 + 5*ch));
+  char buf[256];
+  snprintf(buf, sizeof(buf),
+           "{\"event\":\"detection\",\"detection_method\":\"wifi_%s\","
+           "\"detection_tier\":%u,\"protocol\":\"wifi_2_4ghz\","
+           "\"mac_address\":\"%s\",\"rssi\":%d,\"channel\":%u,"
+           "\"frequency\":%u,\"ssid\":\"\"}",
+           method, (unsigned)tier, mac, rssi, (unsigned)ch, (unsigned)(2407 + 5*ch));
+  Serial.println(buf);
+  WhereDaFlockBLETelemetry::broadcast(buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +542,7 @@ void setup() {
 
   startupBeep();
   dongleDisplayInit();
+  WhereDaFlockBLETelemetry::init();
 
   // Session + control plane (SPIFFS persistence, NVS beep mask, boot recovery).
   WhereDaFlockSession::loadBeepMask();

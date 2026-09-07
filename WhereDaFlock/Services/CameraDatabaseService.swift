@@ -17,12 +17,15 @@ class CameraDatabaseService: ObservableObject {
     func loadCameras() {
         isLoading = true
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            self.cameras = self.sampleCameras
-            self.lastUpdated = Date()
-            self.isLoading = false
-            self.cacheCameras()
+            let loaded = self.loadBundledCameras() ?? self.sampleCameras
+            
+            DispatchQueue.main.async {
+                self.cameras = loaded
+                self.lastUpdated = Date()
+                self.isLoading = false
+            }
         }
     }
     
@@ -77,9 +80,26 @@ class CameraDatabaseService: ObservableObject {
     }
     
     private func cacheCameras() { /* Encrypted local cache in production */ }
+    
     private func loadCachedCameras() {
-        self.cameras = sampleCameras
-        self.lastUpdated = Date()
+        if let bundled = loadBundledCameras(), !bundled.isEmpty {
+            self.cameras = bundled
+            self.lastUpdated = Date()
+            print("[WhereDaFlock] Pre-loaded \(bundled.count) cameras from offline bundle.")
+        } else {
+            self.cameras = sampleCameras
+            self.lastUpdated = Date()
+        }
+    }
+    
+    private func loadBundledCameras() -> [Camera]? {
+        guard let url = Bundle.main.url(forResource: "cameras", withExtension: "json"),
+              let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode([Camera].self, from: data)
     }
     
     // MARK: - Sample Camera Data
@@ -112,6 +132,4 @@ class CameraDatabaseService: ObservableObject {
                    source: Camera.CameraSource(name: "Government Data", reliability: 0.99, lastUpdated: now))
         ]
     }
-}
-
 }

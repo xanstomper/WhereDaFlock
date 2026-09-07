@@ -17,10 +17,9 @@ class VisionDetectionService: NSObject, ObservableObject {
     }
     
     private func setupModel() {
-        // In production: load a CoreML model trained on camera infrastructure
-        // For YOLO-based detection, use a model like YOLOv8 converted to CoreML
-        guard let model = try? VNCoreMLModel(for: CameraDetectionModel().model) else {
-            print("Warning: Camera detection model not loaded. Using placeholder.")
+        guard let mlModel = CameraDetectionModel.shared.model,
+              let model = try? VNCoreMLModel(for: mlModel) else {
+            print("[WhereDaFlock] Notice: CameraDetectionModel bundle not found. Vision scanner operating in passive heuristic mode.")
             return
         }
         

@@ -5,11 +5,21 @@ import Vision
 // This is a placeholder for the actual CoreML model (YOLOv8 or similar)
 // In production, replace with the actual compiled .mlmodelc file
 class CameraDetectionModel {
-    var model: MLModel {
-        // Placeholder - returns empty model spec
-        // In production: load from bundle
-        // return try! MLModel(contentsOf: Bundle.main.url(forResource: "CameraDetector", withExtension: "mlmodelc")!)
-        fatalError("Replace with actual CoreML model. Use YOLOv8 -> CoreML conversion.")
+    static let shared = CameraDetectionModel()
+    
+    var model: MLModel? {
+        let possibleNames = ["CameraDetector", "YOLOv8Surveillance", "ALPRDetector"]
+        let possibleExtensions = ["mlmodelc", "mlpackage"]
+        
+        for name in possibleNames {
+            for ext in possibleExtensions {
+                if let url = Bundle.main.url(forResource: name, withExtension: ext),
+                   let loaded = try? MLModel(contentsOf: url) {
+                    return loaded
+                }
+            }
+        }
+        return nil
     }
 }
 
