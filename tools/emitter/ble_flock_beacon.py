@@ -107,6 +107,7 @@ def main():
     if status_res.returncode == 0:
         was_bt_active = True
         print("[*] Temporarily pausing bluetooth.service to allow raw legacy HCI advertising...")
+        subprocess.run(["systemctl", "mask", "--runtime", "bluetooth.service"])
         subprocess.run(["systemctl", "stop", "bluetooth"])
 
     try:
@@ -120,11 +121,15 @@ def main():
 
         if args.secs > 0:
             print(f"[*] Running for {args.secs:.0f} seconds (Ctrl-C to stop early)...")
-            time.sleep(args.secs)
+            start_t = time.time()
+            while time.time() - start_t < args.secs:
+                time.sleep(1)
+                run_cmd(["hcitool", "-i", args.adapter, "cmd", "0x08", "0x000a", "01"], check=False)
         else:
             print("[*] Running indefinitely (Ctrl-C to stop)...")
             while True:
-                time.sleep(3600)
+                time.sleep(2)
+                run_cmd(["hcitool", "-i", args.adapter, "cmd", "0x08", "0x000a", "01"], check=False)
     except KeyboardInterrupt:
         print("\n[*] Stopping advertiser...")
     finally:
@@ -132,6 +137,7 @@ def main():
         stop_advertising(args.adapter)
         if was_bt_active:
             print("[*] Restoring bluetooth.service...")
+            subprocess.run(["systemctl", "unmask", "bluetooth.service"])
             subprocess.run(["systemctl", "start", "bluetooth"])
         print("[*] Done.")
 
