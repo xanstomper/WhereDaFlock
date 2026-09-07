@@ -54,10 +54,11 @@ void setup() {
   BLEAdvertisementData adv;
   adv.setName("FS Ext Battery");
   adv.setManufacturerData(std::string((char*)mfrData, sizeof(mfrData)));
-  adv.setCompleteServices16(BLEUUID(0x180F));  // Battery Service (supporting signal)
+  adv.setCompleteServices(BLEUUID("180F"));  // Battery Service (supporting signal)
 
+  BLEAdvertisementData emptyScanResponse;   // no scan-response payload
   pAdvertising->setAdvertisementData(adv);
-  pAdvertising->setScanResponseData(BLEAdvertisementData()); // empty
+  pAdvertising->setScanResponseData(emptyScanResponse);
   BLEDevice::startAdvertising();
 
   Serial.println("[EMU] advertising with Flock MFR ID 0x09C8");

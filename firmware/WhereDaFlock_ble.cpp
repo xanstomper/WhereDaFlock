@@ -245,13 +245,16 @@ void setup() {
   pBLEScan->setActiveScan(true);     // request scan responses for more info
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);
-  pBLEScan->setMaxResults(0);        // process results live, don't buffer
+  // Results are processed live via the callback; start() returns the set which
+  // we discard each cycle.
 
   Serial.println("Scanning...");
 }
 
 void loop() {
-  BLEScanResults* found = pBLEScan->start(SCAN_DURATION, false);
+  // start() returns BLEScanResults by value; the callback has already
+  // processed matches live, so we just clear and move on.
+  (void)pBLEScan->start(SCAN_DURATION, false);
   pBLEScan->clearResults();
 
   // Heartbeat while likely Flock devices remain in range.
@@ -267,5 +270,5 @@ void loop() {
     }
   }
 
-  delete found;
+  // start() returns BLEScanResults by value; nothing to free.
 }

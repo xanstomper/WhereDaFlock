@@ -72,7 +72,7 @@ worth reporting, but below the loud-alarm threshold alone.
 
 ---
 
-## 4. Firmware (`WhereDaFlock_ble.ino`)
+## 4. Firmware (`WhereDaFlock_ble.cpp`)
 
 - Uses the ESP32 BLE scan API (`BLEScan`), **active scan** to request scan
   responses (which can reveal the readable name), live processing (`setMaxResults(0)`).
@@ -91,8 +91,8 @@ pio run -e xiao_esp32s3_ble -t upload     # or the Arduino CLI command below
 Arduino CLI:
 
 ```bash
-arduino-cli compile --fqbn esp32:esp32:esp32 WhereDaFlock_ble.ino
-arduino-cli upload --fqbn esp32:esp32:esp32 --port /dev/ttyUSB0 WhereDaFlock_ble.ino
+arduino-cli compile --fqbn esp32:esp32:esp32 WhereDaFlock_ble.cpp
+arduino-cli upload --fqbn esp32:esp32:esp32 --port /dev/ttyUSB0 WhereDaFlock_ble.cpp
 ```
 
 Output:

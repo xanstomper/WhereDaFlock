@@ -37,8 +37,8 @@ Flask-SocketIO, pyserial, eventlet).
 
 ## Connecting a detector
 
-1. Flash either the WiFi detector (`WhereDaFlock_scanner.ino`) or the BLE
-   scanner (`WhereDaFlock_ble.ino`) to an ESP32.
+1. Flash either the WiFi detector (`WhereDaFlock_scanner.cpp`) or the BLE
+   scanner (`WhereDaFlock_ble.cpp`) to an ESP32.
 2. Plug the ESP32 in over USB (it prints one JSON line per detection @ 115200).
 3. In the dashboard, pick the ESP32's serial port under **Sources** and click
    **Connect**.

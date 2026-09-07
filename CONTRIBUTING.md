@@ -20,7 +20,7 @@ WhereDaFlock/
 ├── WhereDaFlock/            # iOS SwiftUI app
 ├── firmware/                # ESP32 detector + host companion
 │   ├── src/signatures.h     # OUI list + tiers (source of truth)
-│   ├── WhereDaFlock_scanner.ino
+│   ├── WhereDaFlock_scanner.cpp
 │   ├── host_scanner.py      # must stay in sync with signatures.h
 │   └── tests/test_detection.py
 ├── docs/                    # DETECTION-GUIDE, BUILD-FIRMWARE, HARDWARE, PROTOCOL

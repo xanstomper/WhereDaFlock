@@ -105,3 +105,34 @@ jobs:
           assert len(data) > 1000, f"Expected >1000 cameras, got {len(data)}"
           print(f"Validated {len(data)} bundled camera records.")
           '
+
+  firmware-build:
+    name: ESP32 Firmware Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build WiFi detector (xiao_esp32s3)
+        working-directory: firmware
+        run: pio run -e xiao_esp32s3
+
+      - name: Build BLE scanner (xiao_esp32s3_ble)
+        working-directory: firmware
+        run: pio run -e xiao_esp32s3_ble
+
+      - name: Build emulator test beacon (pio ci)
+        working-directory: tools/emulator
+        run: |
+          pio ci FlockCam_emulator.ino \
+            --board esp32-s3-devkitc-1 \
+            --project-option "platform=espressif32@6.9.0" \
+            --project-option "framework=arduino"

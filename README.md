@@ -917,10 +917,10 @@ pio device monitor -b 115200
 arduino-cli core install esp32:esp32
 
 # Compile sketch
-arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/WhereDaFlock_scanner.ino
+arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/WhereDaFlock_scanner.cpp
 
 # Flash to connected board
-arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32s3 firmware/WhereDaFlock_scanner.ino
+arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32s3 firmware/WhereDaFlock_scanner.cpp
 
 # Monitor output
 arduino-cli monitor -p /dev/ttyUSB0 --config baudrate=115200

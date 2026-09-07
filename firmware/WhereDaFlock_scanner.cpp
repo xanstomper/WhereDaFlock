@@ -414,7 +414,12 @@ static void emitDetectionJSON(const char* mac, const char* method, uint8_t tier,
 static void drainAlertQueue() {
   size_t n = 0;
   while (alertHead != alertTail && n < ALERT_QUEUE_SIZE) {
-    const AlertEntry* e = &alertQueue[alertTail];
+    // Copy the volatile ISR-written entry into a local (the queue is drained from
+    // loop() context only, so this read is safe). memcpy sidesteps the
+    // copy-construction restriction on volatile objects.
+    AlertEntry local;
+    memcpy(&local, (const void*)&alertQueue[alertTail], sizeof(AlertEntry));
+    const AlertEntry* e = &local;
     alertTail = (alertTail + 1) % ALERT_QUEUE_SIZE;
     n++;
 

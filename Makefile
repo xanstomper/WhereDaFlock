@@ -55,8 +55,10 @@ ble:
 firmware: wifi ble
 
 emulator:
-	cd tools/emulator && pio run 2>/dev/null || \
-		echo "Build emulator with arduino-cli: compile --fqbn esp32:esp32:esp32 FlockCam_emulator.ino"
+	cd tools/emulator && pio ci FlockCam_emulator.ino \
+		--board esp32-s3-devkitc-1 \
+		--project-option "platform=espressif32@6.9.0" \
+		--project-option "framework=arduino"
 
 analyze:
 	$(PY) firmware/packet_analyzer.py --help
