@@ -43,9 +43,25 @@ class BluetoothService: NSObject, ObservableObject {
         detectedDevices.removeAll()
     }
     
-    private func classifyDevice(name: String?, uuid: UUID) -> DetectedBluetoothDevice.BTDeviceType {
+    // Flock Safety BLE Company Identifier (manufacturer-data first 2 bytes,
+    // little-endian). Matches firmware/src/ble_signatures.h.
+    private let flockMfrID: UInt16 = 0x09C8
+    
+    // Returns true if the advertisement's manufacturer data begins with the
+    // Flock Company ID (little-endian). Mirrors hasFlockMfrId() in the firmware.
+    private func isFlockManufacturerData(_ manufacturerData: Data?) -> Bool {
+        guard let data = manufacturerData, data.count >= 2 else { return false }
+        let mfrID = UInt16(data[data.startIndex]) | (UInt16(data[data.startIndex + 1]) << 8)
+        return mfrID == flockMfrID
+    }
+    
+    private func classifyDevice(name: String?, uuid: UUID, manufacturerData: Data?) -> DetectedBluetoothDevice.BTDeviceType {
+        // Decisive Flock signal: manufacturer Company ID 0x09C8.
+        if isFlockManufacturerData(manufacturerData) { return .flock }
+        
         guard let name = name?.uppercased() else { return .unknown }
         
+        if name.contains("FLOCK") { return .flock }
         if name.contains("AIR") || name.contains("TAG") { return .airtag }
         if name.contains("BEACON") || name.contains("IBEACON") { return .beacon }
         if name.contains("CAR") || name.contains("BMW") || name.contains("FORD") || name.contains("TESLA") || name.contains("HONDA") || name.contains("TOYOTA") || name.contains("AUDI") || name.contains("MERCEDES") {
@@ -89,7 +105,8 @@ extension BluetoothService: CBCentralManagerDelegate {
     
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String
-        let deviceType = classifyDevice(name: name, uuid: peripheral.identifier)
+        let mfrData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
+        let deviceType = classifyDevice(name: name, uuid: peripheral.identifier, manufacturerData: mfrData)
         let distance = estimateDistance(rssi: RSSI.intValue)
         
         let device = DetectedBluetoothDevice(

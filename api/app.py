@@ -192,9 +192,15 @@ def _serial_reader(port, baud=115200):
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if data.get("event") in ("detection", "new", "update") or \
+            ev = data.get("event")
+            # Ingest real detections and standalone-session replays regardless
+            # of whether a protocol field is present (device replays do not set
+            # one). The firmware keeps protocol:wifi_2_4ghz / ble on live hits.
+            if ev in ("detection", "new", "update", "session_det") or \
                     data.get("protocol") in ("wifi_2_4ghz", "ble"):
-                _ingest({**data, "source": "serial"})
+                if ev == "session_det":
+                    data.setdefault("source", "replay")
+                _ingest({**data, "source": data.get("source", "serial")})
     except Exception as exc:
         print(f"[wdf-dash] serial loop ended: {exc}")
     finally:

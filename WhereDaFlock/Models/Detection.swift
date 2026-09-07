@@ -21,6 +21,7 @@ struct DetectedBluetoothDevice: Identifiable {
         case vehicle = "Vehicle"
         case wearable = "Wearable"
         case iot = "IoT Device"
+        case flock = "Flock Camera"
     }
 }
 

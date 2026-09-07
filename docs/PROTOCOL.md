@@ -144,7 +144,38 @@ tool must be kept in sync manually (documented in `DETECTION-GUIDE.md` §7).
 
 ---
 
-## 5. Consuming the stream (example)
+## 5. Device control channel (dashboard → ESP32)
+
+The firmware reads one JSON command per line on the same USB CDC link over
+which detections stream. Supported commands (see `firmware/src/session.h` and
+`WhereDaFlock_scanner.ino`):
+
+| Command | Effect |
+|---------|--------|
+| `{"cmd":"get_config"}` | device re-emits its `{"event":"config",...}` line |
+| `{"cmd":"set_beep","tier":N,"on":0|1}` | mute/unmute one tier's buzzer |
+| `{"cmd":"set_beep_mask","mask":0-31}` | set all five tiers at once |
+| `{"cmd":"dump_session","source":"live"|"prev"}` | stream the offline session table |
+| `{"cmd":"clear_session"}` | clear the on-device table |
+
+The dashboard exposes these as `GET /api/watch/config`, `POST /api/watch/beep`,
+and `POST /api/watch/dump_session`.
+
+A `dump_session` reply is a replay of stored detections with no wall-clock time
+(no RTC on the ESP32), so the dashboard ingests them as `source:"replay"` and
+does **not** GPS-temporal-match them. Live hits carry `protocol` of
+`wifi_2_4ghz` / `ble`; replays (`event: session_det`) do not.
+
+A demo/smoke tester that POSTs synthetic WiFi + BLE detections is at
+`api/seed.py` (run it against a live dashboard with no ESP32 needed):
+
+```bash
+python3 api/seed.py --count 10
+```
+
+---
+
+## 6. Consuming the stream (example)
 
 A trivial Python consumer for the ESP32 serial output:
 
@@ -166,7 +197,7 @@ with serial.Serial('/dev/ttyACM0', 115200, timeout=1) as ser:
 
 ---
 
-## 6. Legal note on capture
+## 7. Legal note on capture
 
 `host_scanner.py` and the firmware only **listen**. Monitor-mode capture of
 2.4GHz management frames is passive. Follow local RF laws; some jurisdictions
