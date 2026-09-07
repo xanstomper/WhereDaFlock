@@ -70,8 +70,12 @@ struct NavigationRouteView: View {
         guard let userLocation = locationService.userLocation else { return }
         let destLat = userLocation.coordinate.latitude + 0.01
         let destLng = userLocation.coordinate.longitude + 0.01
-        let dest = CLLocationCoordinate2D(latitude: destLat, longitude: destLng)
-        routingService.calculateRoute(from: userLocation.coordinate, to: dest, preference: selectedPreference)
+        routingService.calculateRoute(
+            from: userLocation.coordinate,
+            to: dest,
+            preference: selectedPreference,
+            cameras: cameraService.cameras
+        )
         showRouteOptions = true
     }
 }

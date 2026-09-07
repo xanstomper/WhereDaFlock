@@ -1,0 +1,227 @@
+openapi: 3.0.3
+info:
+  title: WhereDaFlock Spatial Intelligence API
+  description: >
+    High-performance geospatial backend for WhereDaFlock privacy navigation.
+    Provides sub-millisecond corridor risk scoring, camera proximity lookups,
+    ephemeral community report voting, and live OpenStreetMap / DeFlock ingestion.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Local development / Docker instance
+paths:
+  /health:
+    get:
+      summary: Service Health Check
+      description: Returns service uptime, total cameras loaded, and engine status.
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "healthy" }
+                  total_cameras: { type: integer, example: 15000 }
+                  service: { type: string, example: "WhereDaFlock Spatial API" }
+                  version: { type: string, example: "1.0.0" }
+                  timestamp: { type: string, format: date-time }
+
+  /v1/cameras:
+    get:
+      summary: Query Nearby Surveillance Cameras
+      description: Returns cameras located within radiusMeters of a coordinate.
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number, format: float }
+          example: 37.7749
+        - name: lng
+          in: query
+          required: true
+          schema: { type: number, format: float }
+          example: -122.4194
+        - name: radius
+          in: query
+          required: false
+          schema: { type: number, format: float, default: 1000 }
+          description: Search radius in meters
+      responses:
+        '200':
+          description: List of matching cameras
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  radius: { type: number }
+                  cameras:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Camera'
+        '400':
+          description: Missing or invalid parameters
+
+    post:
+      summary: Ingest / Report Camera
+      description: Ingests a new surveillance camera entry into the spatial store.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Camera'
+      responses:
+        '201':
+          description: Camera registered successfully
+
+  /v1/reports:
+    get:
+      summary: Query Active Hazard & Camera Reports
+      description: Returns unexpired community road reports within radius.
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number, format: float }
+        - name: lng
+          in: query
+          required: true
+          schema: { type: number, format: float }
+        - name: radius
+          in: query
+          required: false
+          schema: { type: number, format: float, default: 2000 }
+      responses:
+        '200':
+          description: Active reports
+
+    post:
+      summary: Submit Ephemeral Road Report
+      description: Submits an anonymous community alert (expires automatically).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Report'
+      responses:
+        '201':
+          description: Report submitted
+
+  /v1/reports/vote:
+    post:
+      summary: Upvote or Downvote Report
+      description: Adjusts community confidence score of a report.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, upvote]
+              properties:
+                id: { type: string }
+                upvote: { type: boolean }
+      responses:
+        '200':
+          description: Vote recorded
+
+  /v1/routes/evaluate:
+    post:
+      summary: Evaluate Polyline Route Corridor
+      description: >
+        Scans an 80m buffer corridor along a route polyline against all known
+        surveillance cameras and reports, calculating exposure count, risk score,
+        and privacy rating.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [coordinates]
+              properties:
+                coordinates:
+                  type: array
+                  items:
+                    type: array
+                    items: { type: number }
+                    minItems: 2
+                    maxItems: 2
+                  example: [[37.7749, -122.4194], [37.7755, -122.4180]]
+                preference:
+                  type: string
+                  enum: [fastest, privacy, calm, scenic]
+                  default: privacy
+      responses:
+        '200':
+          description: Corridor risk evaluation summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_distance_meters: { type: number }
+                  camera_exposure_count: { type: integer }
+                  report_count: { type: integer }
+                  risk_score: { type: number, description: "0-100 composite safety score" }
+                  privacy_score: { type: number, description: "0-100 privacy score" }
+                  corridor_rating: { type: string, example: "Clean Corridor" }
+
+  /v1/sync/deflock:
+    post:
+      summary: Trigger OpenStreetMap / DeFlock Live Ingestion
+      description: Queries Overpass API for ALPR surveillance nodes and merges them into the store.
+      responses:
+        '200':
+          description: Sync completed
+
+components:
+  schemas:
+    Coordinate:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude: { type: number, format: float }
+        longitude: { type: number, format: float }
+
+    CameraSource:
+      type: object
+      properties:
+        name: { type: string }
+        reliability: { type: number }
+        lastUpdated: { type: string, format: date-time }
+
+    Camera:
+      type: object
+      required: [id, type, coordinate]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        coordinate: { $ref: '#/components/schemas/Coordinate' }
+        address: { type: string }
+        owner: { type: string }
+        lastVerified: { type: string, format: date-time }
+        confidence: { type: number }
+        isConfirmed: { type: boolean }
+        source: { $ref: '#/components/schemas/CameraSource' }
+
+    Report:
+      type: object
+      required: [id, type, coordinate]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        coordinate: { $ref: '#/components/schemas/Coordinate' }
+        description: { type: string }
+        timestamp: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time }
+        confidence: { type: number }
+        upvotes: { type: integer }
+        downvotes: { type: integer }
+        isVerified: { type: boolean }
+        isAnonymous: { type: boolean }

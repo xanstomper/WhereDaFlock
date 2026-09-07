@@ -769,6 +769,40 @@ CREATE TABLE community_reports (
 CREATE INDEX idx_reports_geom ON community_reports USING GIST(geom);
 ```
 
+### High-Performance Go Spatial API (`Backend/`)
+
+The production backend is implemented in Go 1.22 for microsecond-latency spatial queries:
+
+```bash
+# Launch with PostGIS 16 in Docker:
+make docker-up
+
+# Or run natively:
+make backend
+
+# Run backend unit tests:
+make backend-test
+```
+
+#### Endpoints Overview (OpenAPI 3.0: `Backend/api/openapi.yaml`)
+| Endpoint | Method | Description |
+|:---|:---|:---|
+| `/health` | `GET` | Service status and total loaded camera count |
+| `/v1/cameras` | `GET` | Proximity radius query (`?lat=...&lng=...&radius=1000`) |
+| `/v1/cameras` | `POST` | Ingest newly spotted surveillance node |
+| `/v1/reports` | `GET` / `POST` | Query active reports or submit anonymous alerts |
+| `/v1/reports/vote` | `POST` | Community upvote / downvote report confidence |
+| `/v1/routes/evaluate` | `POST` | 80m corridor polyline risk evaluation |
+| `/v1/sync/deflock` | `POST` | Trigger live OpenStreetMap / DeFlock Overpass ALPR sync |
+
+### Wireless ESP32 BLE Telemetry Bridge (`src/ble_telemetry.h`)
+
+For wire-free in-vehicle deployments, the ESP32 scanner features an optional BLE GATT telemetry server:
+
+- **Service UUID:** `96F10C00-6DF1-4C00-8000-00805F9B34FB`
+- **TX Characteristic (Notify):** `96F10C01-6DF1-4C00-8000-00805F9B34FB`
+- **Companion Auto-Pairing:** The iOS app automatically detects and pairs with the dongle, streaming 2.4GHz RF detections directly into the navigation map without cables.
+
 ### Web Dashboard & Dual-Port Ingest (`api/app.py`, `api/flockyou_ble.py`)
 
 The accompanying Flask + SocketIO web dashboard provides real-time multi-sensor telemetry:
@@ -845,30 +879,36 @@ arduino-cli monitor -p /dev/ttyUSB0 --config baudrate=115200
 - Apple Developer Account (for device deployment)
 
 ### Build Instructions:
-1. Clone repository to your local Mac.
-2. Open `WhereDaFlock.xcodeproj` in Xcode.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/xanstomper/WhereDaFlock.git
+   cd WhereDaFlock
+   ```
+2. Open in Xcode using either method:
+   - **Swift Package Manager (Direct):** Open the root folder or `Package.swift` directly in Xcode (`File -> Open -> WhereDaFlock`).
+   - **XcodeGen (Generate `.xcodeproj`):**
+     ```bash
+     brew install xcodegen
+     xcodegen generate
+     open WhereDaFlock.xcodeproj
+     ```
 3. Select the `WhereDaFlock` target, navigate to **Signing & Capabilities**, and assign your **Development Team**.
-4. Attach an iOS 17+ device and select it as the run destination.
-5. Press `Cmd + R` to compile and launch.
+4. Run the automated unit test suite:
+   - In Xcode: Press `Cmd + U` to run all tests in `WhereDaFlockTests`.
+   - On CLI: `swift test` (macOS).
+5. Attach an iOS 17+ device and press `Cmd + R` to compile and launch.
 
-### YOLOv8 CoreML Model Conversion:
-To enable real-time camera object detection in the Vision Scanner, convert a YOLOv8 surveillance model to Apple CoreML:
+### Automated YOLOv8 CoreML Model Export:
+The repository includes an automated export pipeline with on-device Non-Maximum Suppression (NMS):
 
 ```bash
-pip install ultralytics coremltools
-
-python3 - << 'EOF'
-from ultralytics import YOLO
-
-# Load pre-trained or custom fine-tuned YOLOv8 weights
-model = YOLO('yolov8n.pt')
-
-# Export to CoreML format (.mlpackage)
-model.export(format='coreml', nms=True)
-EOF
+# Export pre-trained or custom fine-tuned YOLOv8 weights to CoreML
+make coreml
+# Or directly:
+python3 tools/export_coreml.py --weights yolov8n.pt --imgsz 640
 ```
 
-Drag the exported `CameraDetector.mlpackage` directly into `WhereDaFlock/AI/` inside Xcode.
+The script outputs `CameraDetector.mlpackage` into `WhereDaFlock/AI/Models/`, which is automatically discovered and bundled by the app. If no weights are present, the app safely activates passive sensor and RF detection mode without crashing.
 
 ---
 
