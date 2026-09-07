@@ -128,7 +128,7 @@ typedef struct __attribute__((packed)) {
 } wifi_ieee80211_mac_hdr_t;
 
 // Pre-compiled OUI byte table (built once in setup so the matcher stays in IRAM).
-static uint8_t oui_bytes[OUI_COUNT][3];
+static uint8_t all_oui_bytes[ALL_OUI_COUNT][3];
 
 // ---------------------------------------------------------------------------
 // State
@@ -141,12 +141,16 @@ static volatile bool  sniffingStopped = false;
 // Alert ring buffer (ISR/callback -> loop), avoids Serial/malloc in the WiFi task.
 typedef struct {
   uint8_t tier;
+  uint8_t category;
   uint8_t mac[6];
   int8_t  rssi;
   uint8_t channel;
   bool    wildcardProbe;
   char    ssid[33];
   char    frameKind[12];
+  char    name[24];
+  char    vendor[24];
+  char    verdict[20];
 } AlertEntry;
 static volatile AlertEntry alertQueue[ALERT_QUEUE_SIZE];
 static volatile size_t alertHead = 0, alertTail = 0;
@@ -201,6 +205,11 @@ void tierChirp(uint8_t tier) {
     default: break;
   }
 }
+void policeChirp() {
+  wdf_hal::toneStart(950); delay(50); wdf_hal::toneStop();
+  delay(15);
+  wdf_hal::toneStart(1450); delay(75); wdf_hal::toneStop();
+}
 static void heartbeatBeep() {
   wdf_hal::toneStart(HB_BEEP_HZ); delay(HB_NOTE_MS); wdf_hal::toneStop();
   delay(HB_GAP_MS);
@@ -226,14 +235,16 @@ static void startupBeep() {
 // ---------------------------------------------------------------------------
 static inline bool isMulticast(const uint8_t* mac) { return mac[0] & 0x01; }
 
-static bool IRAM_ATTR matchOuiRaw(const uint8_t* mac) {
-  // Skip broadcast/multicast. We do NOT skip locally-administered: 82:6b:f2
-  // has bit 1 of byte 0 set, so that would drop a real camera.
-  for (size_t i = 0; i < OUI_COUNT; i++) {
-    if (mac[0] == oui_bytes[i][0] && mac[1] == oui_bytes[i][1] && mac[2] == oui_bytes[i][2])
-      return true;
+static int IRAM_ATTR matchAllOuiRaw(const uint8_t* mac) {
+  for (size_t i = 0; i < ALL_OUI_COUNT; i++) {
+    if (mac[0] == all_oui_bytes[i][0] && mac[1] == all_oui_bytes[i][1] && mac[2] == all_oui_bytes[i][2])
+      return (int)i;
   }
-  return false;
+  return -1;
+}
+
+static inline bool IRAM_ATTR matchOuiRaw(const uint8_t* mac) {
+  return matchAllOuiRaw(mac) >= 0;
 }
 
 static void macToStr(const uint8_t* mac, char* buf, size_t len) {
@@ -243,33 +254,26 @@ static void macToStr(const uint8_t* mac, char* buf, size_t len) {
 
 // Check the 802.11 header + trailer for a management probe request with a
 // wildcard SSID (tag 0, length 0) and, on the top tier, the Flock IE
-// fingerprint. This is a minimal, robust scanner of the probe body.
-// fpPayload, fpLen hold the body bytes after the fixed header.
+// fingerprint.
 static bool IRAM_ATTR isWildcardProbe(const wifi_ieee80211_mac_hdr_t* hdr,
                                        const uint8_t* body, size_t bodyLen,
                                        bool* outHasFlockIe) {
   *outHasFlockIe = false;
   uint16_t fc = hdr->frame_ctrl;
-  // Management frame (type 0), subtype 4 = Probe Request.
   if ((fc & 0x000C) != 0x0000) return false;
   if (((fc >> 4) & 0x0F) != 0x04) return false;
 
-  // Walk the fixed fields of a probe request body: SSID element first.
-  // Probe Request body (after fixed hdr): SSID (tag 0), Supported Rates (1),
-  // then optional IEs.
   const uint8_t* p = body;
   const uint8_t* end = body + bodyLen;
   if (end - p < 2) return false;
   uint8_t tag = p[0], len = p[1];
   bool wildcard = (tag == 0 && len == 0);
-  // Advance past SSID element (+ any zero-fill), bounded by the frame end.
   p += 2 + len;
   if (p > end) p = end;
-  // Scan remaining IEs for the Flock fingerprint markers.
   while (p + 2 <= end) {
     uint8_t t = p[0], l = p[1];
     if (p + 2 + l > end) break;
-    if (t == 0xFF && l > 0) *outHasFlockIe = true;   // vendor-specific element
+    if (t == 0xFF && l > 0) *outHasFlockIe = true;
     p += 2 + l;
   }
   return wildcard;
@@ -278,17 +282,29 @@ static bool IRAM_ATTR isWildcardProbe(const wifi_ieee80211_mac_hdr_t* hdr,
 // ---------------------------------------------------------------------------
 // Ring buffer helpers
 // ---------------------------------------------------------------------------
-static void IRAM_ATTR enqueueAlert(uint8_t tier, const uint8_t* mac, int8_t rssi,
-                                    uint8_t ch, bool wc, const char* ssid, const char* kind) {
+static void IRAM_ATTR enqueueAlert(uint8_t tier, uint8_t category, const uint8_t* mac,
+                                   int8_t rssi, uint8_t ch, bool wc, const char* ssid,
+                                   const char* name, const char* vendor,
+                                   const char* verdict, const char* kind) {
   portENTER_CRITICAL_ISR(&queueMux);
   size_t next = (alertHead + 1) % ALERT_QUEUE_SIZE;
   if (next == alertTail) { portEXIT_CRITICAL_ISR(&queueMux); return; } // full: drop
   AlertEntry* e = (AlertEntry*)&alertQueue[alertHead];
-  e->tier = tier; e->rssi = rssi; e->channel = ch; e->wildcardProbe = wc;
+  e->tier = tier;
+  e->category = category;
+  e->rssi = rssi;
+  e->channel = ch;
+  e->wildcardProbe = wc;
   memcpy((void*)e->mac, mac, 6);
-  if (ssid) strncpy((char*)e->ssid, ssid, 32);
+  if (ssid) strncpy((char*)e->ssid, ssid, 32); else e->ssid[0] = '\0';
   e->ssid[32] = '\0';
-  if (kind) strncpy((char*)e->frameKind, kind, 11);
+  if (name) strncpy((char*)e->name, name, 23); else e->name[0] = '\0';
+  e->name[23] = '\0';
+  if (vendor) strncpy((char*)e->vendor, vendor, 23); else e->vendor[0] = '\0';
+  e->vendor[23] = '\0';
+  if (verdict) strncpy((char*)e->verdict, verdict, 19); else e->verdict[0] = '\0';
+  e->verdict[19] = '\0';
+  if (kind) strncpy((char*)e->frameKind, kind, 11); else e->frameKind[0] = '\0';
   e->frameKind[11] = '\0';
   alertHead = next;
   portEXIT_CRITICAL_ISR(&queueMux);
@@ -303,40 +319,93 @@ static void IRAM_ATTR wifiSniffer(void* buf, wifi_promiscuous_pkt_type_t type) {
   const wifi_ieee80211_mac_hdr_t* hdr =
       (const wifi_ieee80211_mac_hdr_t*)pkt->payload;
 
-  // addr2 (transmitter) OUI match - primary tier-2 signal.
-  if (!isMulticast(hdr->addr2) && matchOuiRaw(hdr->addr2)) {
-    uint8_t tier = TIER_OUI;
-    bool wc = false, hasIe = false;
-    if (type == WIFI_PKT_MGMT) {
-      const uint8_t* body = pkt->payload + sizeof(wifi_ieee80211_mac_hdr_t);
-      size_t bodyLen = pkt->rx_ctrl.sig_len > sizeof(wifi_ieee80211_mac_hdr_t)
-                       ? pkt->rx_ctrl.sig_len - sizeof(wifi_ieee80211_mac_hdr_t) : 0;
-      if (isWildcardProbe(hdr, body, bodyLen, &hasIe)) {
-        wc = true;
-        tier = hasIe ? TIER_IE_SIG : TIER_PROBE;
+  // 1. Transmitter (addr2) multi-threat OUI match
+  if (!isMulticast(hdr->addr2)) {
+    int matchIdx = matchAllOuiRaw(hdr->addr2);
+    if (matchIdx >= 0) {
+      const OuiSignatureEntry& sig = ALL_TARGET_OUIS[matchIdx];
+      uint8_t tier = (sig.category == CAT_FLOCK_ALPR) ? TIER_OUI : TIER_PROBE;
+      bool wc = false, hasIe = false;
+      if (type == WIFI_PKT_MGMT) {
+        const uint8_t* body = pkt->payload + sizeof(wifi_ieee80211_mac_hdr_t);
+        size_t bodyLen = pkt->rx_ctrl.sig_len > sizeof(wifi_ieee80211_mac_hdr_t)
+                         ? pkt->rx_ctrl.sig_len - sizeof(wifi_ieee80211_mac_hdr_t) : 0;
+        if (isWildcardProbe(hdr, body, bodyLen, &hasIe)) {
+          wc = true;
+          if (sig.category == CAT_FLOCK_ALPR) {
+            tier = hasIe ? TIER_IE_SIG : TIER_PROBE;
+          }
+        }
       }
+      enqueueAlert(tier, sig.category, hdr->addr2, (int8_t)pkt->rx_ctrl.rssi,
+                   currentChannel, wc, "", sig.defaultName, sig.vendor, sig.verdict, "addr2");
+      return;
     }
-    enqueueAlert(tier, hdr->addr2, (int8_t)pkt->rx_ctrl.rssi,
-                 currentChannel, wc, "", "mgmt");
-    return;
   }
 
-  // addr1 (receiver) and addr3 (BSSID) OUI - tier-1 echo signals (noisier).
+  // 2. Management body analysis (Open Drone ID IE, Axon/Police/ALPR SSIDs)
+  if (type == WIFI_PKT_MGMT) {
+    const uint8_t* body = pkt->payload + sizeof(wifi_ieee80211_mac_hdr_t);
+    size_t bodyLen = pkt->rx_ctrl.sig_len > sizeof(wifi_ieee80211_mac_hdr_t)
+                     ? pkt->rx_ctrl.sig_len - sizeof(wifi_ieee80211_mac_hdr_t) : 0;
+
+    // Check for Open Drone ID OUI (FA:0B:BC) in Information Elements
+    if (bodyLen >= 6) {
+      const uint8_t* p = body;
+      const uint8_t* end = body + bodyLen;
+      while (p + 2 <= end) {
+        uint8_t t = p[0], l = p[1];
+        if (p + 2 + l > end) break;
+        if (t == 0xDD && l >= 3) {
+          if (p[2] == 0xFA && p[3] == 0x0B && p[4] == 0xBC) {
+            enqueueAlert(TIER_PROBE, CAT_DRONE_UAV, hdr->addr2, (int8_t)pkt->rx_ctrl.rssi,
+                         currentChannel, false, "OpenDroneID", "FAA Drone Remote ID",
+                         "OpenDroneID", "DRONE_DETECTED", "drone_ie");
+            return;
+          }
+        }
+        p += 2 + l;
+      }
+    }
+
+    // Check SSID in Beacon / Probe Response / Probe Request
+    if (bodyLen >= 2 && body[0] == 0) {
+      uint8_t ssidLen = body[1];
+      if (ssidLen > 0 && ssidLen <= 32 && (size_t)(ssidLen + 2) <= bodyLen) {
+        char sBuf[33];
+        memcpy(sBuf, body + 2, ssidLen);
+        sBuf[ssidLen] = '\0';
+        for (size_t k = 0; k < SSID_KEYWORD_COUNT; k++) {
+          if (strcasestr(sBuf, TARGET_SSID_KEYWORDS[k].pattern)) {
+            enqueueAlert(TIER_PROBE, TARGET_SSID_KEYWORDS[k].category, hdr->addr2,
+                         (int8_t)pkt->rx_ctrl.rssi, currentChannel, false, sBuf,
+                         TARGET_SSID_KEYWORDS[k].defaultName,
+                         TARGET_SSID_KEYWORDS[k].vendor,
+                         TARGET_SSID_KEYWORDS[k].verdict, "ssid");
+            return;
+          }
+        }
+      }
+    }
+  }
+
 #if CHECK_ADDR1
-  if (!isMulticast(hdr->addr1) && matchOuiRaw(hdr->addr1)) {
-    enqueueAlert(TIER_ECHO, hdr->addr1, (int8_t)pkt->rx_ctrl.rssi,
-                 currentChannel, false, "", "addr1");
+  if (!isMulticast(hdr->addr1)) {
+    int m1 = matchAllOuiRaw(hdr->addr1);
+    if (m1 >= 0) {
+      const OuiSignatureEntry& sig = ALL_TARGET_OUIS[m1];
+      enqueueAlert(TIER_ECHO, sig.category, hdr->addr1, (int8_t)pkt->rx_ctrl.rssi,
+                   currentChannel, false, "", sig.defaultName, sig.vendor, sig.verdict, "addr1");
+    }
   }
 #endif
 #if CHECK_ADDR3
-  if (matchOuiRaw(hdr->addr3)) {
-    enqueueAlert(TIER_ECHO, hdr->addr3, (int8_t)pkt->rx_ctrl.rssi,
-                 currentChannel, false, "", "addr3");
+  int m3 = matchAllOuiRaw(hdr->addr3);
+  if (m3 >= 0) {
+    const OuiSignatureEntry& sig = ALL_TARGET_OUIS[m3];
+    enqueueAlert(TIER_ECHO, sig.category, hdr->addr3, (int8_t)pkt->rx_ctrl.rssi,
+                 currentChannel, false, "", sig.defaultName, sig.vendor, sig.verdict, "addr3");
   }
-#endif
-
-#if ENABLE_SSID_MATCH
-  (void)target_ssid_keywords; // SSID keyword path (off by default)
 #endif
 }
 
@@ -362,8 +431,10 @@ static bool shouldSuppressDuplicate(const char* macStr, uint8_t tier) {
   return false;
 }
 
-static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
-                          int8_t rssi, uint8_t ch, const char* ssid, bool* outChirpWorthy) {
+int wdfAddGenericDetection(const char* mac, const char* name, const char* proto,
+                           const char* vendor, const char* method, const char* verdict,
+                           uint8_t category, uint8_t tier, int8_t rssi, uint8_t ch,
+                           float distM, uint8_t conf, bool* outChirpWorthy) {
   uint32_t now = millis();
   for (int i = 0; i < wdfDetCount; i++) {
     if (strcmp(wdfDet[i].mac, mac) == 0) {
@@ -371,30 +442,38 @@ static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
       if (wdfDet[i].count < 0xFFFF) wdfDet[i].count++;
       wdfDet[i].lastSeen = now;
       wdfDet[i].rssi = rssi;
-      wdfDet[i].channel = ch;
-      wdfDet[i].distM = (rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)rssi) / 20.0f);
+      if (ch > 0) wdfDet[i].channel = ch;
+      if (distM >= 0) wdfDet[i].distM = distM;
+      if (conf > wdfDet[i].confidence) wdfDet[i].confidence = conf;
       bool upgrade = tier > wdfDet[i].tier;
       if (upgrade) {
         wdfDet[i].tier = tier;
-        strlcpy(wdfDet[i].method, method ? method : "", sizeof(wdfDet[i].method));
+        if (method && strlen(method)) strlcpy(wdfDet[i].method, method, sizeof(wdfDet[i].method));
+        if (verdict && strlen(verdict)) strlcpy(wdfDet[i].verdict, verdict, sizeof(wdfDet[i].verdict));
+      }
+      if (name && strlen(name) && (strlen(wdfDet[i].name) == 0 || strcmp(wdfDet[i].name, "?") == 0)) {
+        strlcpy(wdfDet[i].name, name, sizeof(wdfDet[i].name));
       }
       if (outChirpWorthy) *outChirpWorthy = rediscover || upgrade;
       return i;
     }
   }
-  if (wdfDetCount >= MAX_DETECTIONS) { if (outChirpWorthy) *outChirpWorthy = false; return -1; }
+  if (wdfDetCount >= MAX_DETECTIONS) {
+    if (outChirpWorthy) *outChirpWorthy = false;
+    return -1;
+  }
   WDFDetection& d = wdfDet[wdfDetCount];
   strlcpy(d.mac, mac, sizeof(d.mac));
-  strlcpy(d.name, (ssid && strlen(ssid) > 0) ? ssid : "Flock Falcon ALPR", sizeof(d.name));
-  strlcpy(d.protocol, "WiFi", sizeof(d.protocol));
-  strlcpy(d.vendor, "Flock Safety (OUI)", sizeof(d.vendor));
-  const char* methodFull = (tier >= 4) ? "IE_FINGERPRINT" : ((tier >= 3) ? "WILDCARD_PROBE" : "OUI_ADDR2");
-  strlcpy(d.method, methodFull, sizeof(d.method));
-  strlcpy(d.verdict, (tier >= 3) ? "FLOCK_CONFIRMED" : "FLOCK_SUSPECT", sizeof(d.verdict));
+  strlcpy(d.name, (name && strlen(name)) ? name : "Unknown Target", sizeof(d.name));
+  strlcpy(d.protocol, (proto && strlen(proto)) ? proto : "WiFi", sizeof(d.protocol));
+  strlcpy(d.vendor, (vendor && strlen(vendor)) ? vendor : "Surveillance", sizeof(d.vendor));
+  strlcpy(d.method, (method && strlen(method)) ? method : "OUI", sizeof(d.method));
+  strlcpy(d.verdict, (verdict && strlen(verdict)) ? verdict : "SUSPECT", sizeof(d.verdict));
+  d.category = category;
   d.tier = tier;
   d.rssi = rssi;
-  d.distM = (rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)rssi) / 20.0f);
-  d.confidence = (tier >= 4) ? 100 : ((tier >= 3) ? 85 : ((tier >= 2) ? 65 : 40));
+  d.distM = (distM >= 0) ? distM : ((rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)rssi) / 20.0f));
+  d.confidence = conf;
   d.channel = ch;
   d.firstSeen = d.lastSeen = now;
   d.count = 1;
@@ -405,58 +484,43 @@ static int fyAddDetection(const char* mac, const char* method, uint8_t tier,
 }
 
 int wdfAddBleDetection(const char* mac, const char* name, const char* vendor,
-                       const char* method, const char* verdict, int8_t rssi,
-                       float distM, uint8_t conf, bool* outChirpWorthy) {
-  uint32_t now = millis();
-  for (int i = 0; i < wdfDetCount; i++) {
-    if (strcmp(wdfDet[i].mac, mac) == 0) {
-      bool rediscover = (now - wdfDet[i].lastSeen) > REDISCOVER_MS;
-      if (wdfDet[i].count < 0xFFFF) wdfDet[i].count++;
-      wdfDet[i].lastSeen = now;
-      wdfDet[i].rssi = rssi;
-      wdfDet[i].distM = distM;
-      if (conf > wdfDet[i].confidence) wdfDet[i].confidence = conf;
-      if (name && strlen(name) > 0 && (strlen(wdfDet[i].name) == 0 || strcmp(wdfDet[i].name, "?") == 0)) {
-        strlcpy(wdfDet[i].name, name, sizeof(wdfDet[i].name));
-      }
-      if (outChirpWorthy) *outChirpWorthy = rediscover;
-      return i;
-    }
-  }
-  if (wdfDetCount >= MAX_DETECTIONS) {
-    if (outChirpWorthy) *outChirpWorthy = false;
-    return -1;
-  }
-  WDFDetection& d = wdfDet[wdfDetCount];
-  strlcpy(d.mac, mac, sizeof(d.mac));
-  strlcpy(d.name, (name && strlen(name) > 0) ? name : "FS Ext Battery", sizeof(d.name));
-  strlcpy(d.protocol, "BLE", sizeof(d.protocol));
-  strlcpy(d.vendor, (vendor && strlen(vendor) > 0) ? vendor : "Flock Safety (0x09C8)", sizeof(d.vendor));
-  strlcpy(d.method, method ? method : "mfr_id", sizeof(d.method));
-  strlcpy(d.verdict, verdict ? verdict : "FLOCK_LIKELY", sizeof(d.verdict));
-  d.tier = 4;
-  d.rssi = rssi;
-  d.distM = distM;
-  d.confidence = conf;
-  d.channel = 0;
-  d.firstSeen = d.lastSeen = now;
-  d.count = 1;
-  d.ssid[0] = '\0';
-  wdfDetCount++;
-  if (outChirpWorthy) *outChirpWorthy = true;
-  return wdfDetCount - 1;
+                       const char* method, const char* verdict, uint8_t category,
+                       int8_t rssi, float distM, uint8_t conf, bool* outChirpWorthy) {
+  return wdfAddGenericDetection(mac, name, "BLE", vendor, method, verdict,
+                                category, 4, rssi, 0, distM, conf, outChirpWorthy);
 }
 
-// JSON-emit one detection line (manual, compact) and broadcast via BLE.
+static int fyAddDetection(const char* mac, const char* name, const char* vendor,
+                          const char* method, const char* verdict, uint8_t category,
+                          uint8_t tier, int8_t rssi, uint8_t ch, const char* ssid,
+                          bool* outChirpWorthy) {
+  const char* defName = (name && strlen(name)) ? name : ((ssid && strlen(ssid)) ? ssid : "Flock Falcon ALPR");
+  const char* defVendor = (vendor && strlen(vendor)) ? vendor : "Flock Safety";
+  const char* defVerdict = (verdict && strlen(verdict)) ? verdict : ((tier >= 3) ? "FLOCK_CONFIRMED" : "FLOCK_SUSPECT");
+  uint8_t conf = (tier >= 4) ? 100 : ((tier >= 3) ? 85 : ((tier >= 2) ? 65 : 40));
+  float distM = (rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)rssi) / 20.0f);
+  int idx = wdfAddGenericDetection(mac, defName, "WiFi 2.4G", defVendor, method, defVerdict,
+                                  category, tier, rssi, ch, distM, conf, outChirpWorthy);
+  if (idx >= 0 && ssid && strlen(ssid)) {
+    strlcpy(wdfDet[idx].ssid, ssid, sizeof(wdfDet[idx].ssid));
+  }
+  return idx;
+}
+
+// JSON-emit one detection line (rich multi-threat format) and broadcast via BLE.
 static void emitDetectionJSON(const char* mac, const char* method, uint8_t tier,
-                              int8_t rssi, uint8_t ch) {
-  char buf[256];
+                              uint8_t category, const char* name, const char* vendor,
+                              const char* verdict, int8_t rssi, uint8_t ch) {
+  char buf[320];
   snprintf(buf, sizeof(buf),
-           "{\"event\":\"detection\",\"detection_method\":\"wifi_%s\","
+           "{\"event\":\"detection\",\"category\":\"%s\",\"name\":\"%s\","
+           "\"vendor\":\"%s\",\"verdict\":\"%s\",\"detection_method\":\"wifi_%s\","
            "\"detection_tier\":%u,\"protocol\":\"wifi_2_4ghz\","
            "\"mac_address\":\"%s\",\"rssi\":%d,\"channel\":%u,"
-           "\"frequency\":%u,\"ssid\":\"\"}",
-           method, (unsigned)tier, mac, rssi, (unsigned)ch, (unsigned)(2407 + 5*ch));
+           "\"frequency\":%u}",
+           categoryToString((TargetCategory)category), name, vendor, verdict,
+           method, (unsigned)tier, mac, rssi, (unsigned)ch,
+           (unsigned)(ch ? (2407 + 5*ch) : 2402));
   Serial.println(buf);
   WhereDaFlockBLETelemetry::broadcast(buf);
 }
@@ -467,9 +531,6 @@ static void emitDetectionJSON(const char* mac, const char* method, uint8_t tier,
 static void drainAlertQueue() {
   size_t n = 0;
   while (alertHead != alertTail && n < ALERT_QUEUE_SIZE) {
-    // Copy the volatile ISR-written entry into a local (the queue is drained from
-    // loop() context only, so this read is safe). memcpy sidesteps the
-    // copy-construction restriction on volatile objects.
     AlertEntry local;
     memcpy(&local, (const void*)&alertQueue[alertTail], sizeof(AlertEntry));
     const AlertEntry* e = &local;
@@ -481,7 +542,13 @@ static void drainAlertQueue() {
     const char* method = tierToMethodLetter(e->tier);
 
     bool chirpWorthy = false;
-    int idx = fyAddDetection(mac, method, e->tier, e->rssi, e->channel, (const char*)e->ssid, &chirpWorthy);
+    const char* finalName = (e->name[0] != '\0') ? e->name : ((e->ssid[0] != '\0') ? e->ssid : "Target");
+    const char* finalVendor = (e->vendor[0] != '\0') ? e->vendor : "Surveillance";
+    const char* finalVerdict = (e->verdict[0] != '\0') ? e->verdict : "CONFIRMED";
+
+    int idx = fyAddDetection(mac, finalName, finalVendor, method, finalVerdict,
+                             e->category, e->tier, e->rssi, e->channel,
+                             (const char*)e->ssid, &chirpWorthy);
     if (idx < 0) continue;
     if (chirpWorthy) {
       fyLastTargetSeen = millis();
@@ -489,18 +556,19 @@ static void drainAlertQueue() {
     }
 
     if (!shouldSuppressDuplicate(mac, e->tier)) {
-      emitDetectionJSON(mac, method, e->tier, e->rssi, e->channel);
-      tierChirp(e->tier);
+      emitDetectionJSON(mac, method, e->tier, e->category, finalName, finalVendor, finalVerdict, e->rssi, e->channel);
+      if (e->category == CAT_POLICE_VEHICLE || e->category == CAT_POLICE_BODYCAM || e->category == CAT_POLICE_RADIO) {
+        policeChirp();
+      } else {
+        tierChirp(e->tier);
+      }
       ledSet(true); ledOffAt = millis() + LED_FLASH_MS;
 #ifdef USE_M5STICKC_PLUS_DISPLAY
-      const char* proto = "WiFi 2.4G";
-      const char* name = (e->ssid[0] != '\0') ? (const char*)e->ssid : "Flock Falcon ALPR";
-      const char* vendor = "Flock Safety (OUI)";
-      const char* methodFull = (e->tier >= 4) ? "IE_FINGERPRINT" : ((e->tier >= 3) ? "WILDCARD_PROBE" : "OUI_ADDR2");
-      const char* verdict = (e->tier >= 3) ? "FLOCK_CONFIRMED" : "FLOCK_SUSPECT";
       uint8_t conf = (e->tier >= 4) ? 100 : ((e->tier >= 3) ? 85 : ((e->tier >= 2) ? 65 : 40));
       float distM = (e->rssi == 0) ? -1.0f : powf(10.0f, (-40.0f - (float)e->rssi) / 20.0f);
-      m5stickDisplayShowAlertRich(proto, name, mac, vendor, methodFull, verdict, e->rssi, distM, conf, e->channel, ALERT_COOLDOWN_MS);
+      m5stickDisplayShowAlertRich("WiFi 2.4G", finalName, mac, finalVendor,
+                                 method, finalVerdict, e->rssi, distM, conf,
+                                 e->channel, ALERT_COOLDOWN_MS, e->category);
 #else
       dongleDisplayShowAlert(method, mac, e->rssi, e->channel, ALERT_COOLDOWN_MS);
 #endif
@@ -562,7 +630,69 @@ static void handleHostCommands() {
         cmdBuf[cmdLen] = '\0';
         String cmd = String(cmdBuf);
 
-        if (cmd.indexOf("get_config") >= 0) {
+        if (cmd.startsWith("RADIO ") || cmd.indexOf("radio_alert") >= 0) {
+          // External Police Radio / Frequency Bridge parser
+          // Examples:
+          //   RADIO 851.250 P25_PHASE2 -62 PD DISPATCH TAC1
+          //   {"cmd":"radio_alert","freq":851.25,"proto":"P25","rssi":-62,"desc":"PD TAC1"}
+          char rProto[16] = "P25";
+          char rDesc[32] = "Police Radio";
+          float rFreq = 851.0f;
+          int rRssi = -70;
+
+          if (cmd.startsWith("RADIO ")) {
+            char fStr[16] = {0};
+            char pStr[16] = {0};
+            char rStr[16] = {0};
+            char dStr[32] = {0};
+            int parsed = sscanf(cmdBuf, "RADIO %15s %15s %15s %31[^\r\n]", fStr, pStr, rStr, dStr);
+            if (parsed >= 1) rFreq = atof(fStr);
+            if (parsed >= 2) strncpy(rProto, pStr, sizeof(rProto) - 1);
+            if (parsed >= 3) rRssi = atoi(rStr);
+            if (parsed >= 4) strncpy(rDesc, dStr, sizeof(rDesc) - 1);
+          } else {
+            int fIdx = cmd.indexOf("\"freq\":");
+            if (fIdx >= 0) rFreq = cmd.substring(fIdx + 7).toFloat();
+            int rIdx = cmd.indexOf("\"rssi\":");
+            if (rIdx >= 0) rRssi = cmd.substring(rIdx + 7).toInt();
+            int pIdx = cmd.indexOf("\"proto\":\"");
+            if (pIdx >= 0) {
+              int pEnd = cmd.indexOf("\"", pIdx + 9);
+              if (pEnd > pIdx + 9) {
+                String sub = cmd.substring(pIdx + 9, pEnd);
+                strncpy(rProto, sub.c_str(), sizeof(rProto) - 1);
+              }
+            }
+            int dIdx = cmd.indexOf("\"desc\":\"");
+            if (dIdx >= 0) {
+              int dEnd = cmd.indexOf("\"", dIdx + 8);
+              if (dEnd > dIdx + 8) {
+                String sub = cmd.substring(dIdx + 8, dEnd);
+                strncpy(rDesc, sub.c_str(), sizeof(rDesc) - 1);
+              }
+            }
+          }
+
+          char rMac[20];
+          snprintf(rMac, sizeof(rMac), "RF:%.3f", rFreq);
+          bool chirpWorthy = false;
+          wdfAddGenericDetection(rMac, rDesc, "RADIO", rProto, "RF_BRIDGE", "POLICE_RADIO",
+                                 CAT_POLICE_RADIO, 4, (int8_t)rRssi, 0, -1.0f, 95, &chirpWorthy);
+          policeChirp();
+          ledSet(true); ledOffAt = millis() + LED_FLASH_MS;
+          char rJson[256];
+          snprintf(rJson, sizeof(rJson),
+                   "{\"event\":\"radio_detection\",\"freq_mhz\":%.3f,\"proto\":\"%s\","
+                   "\"rssi\":%d,\"desc\":\"%s\",\"category\":\"POLICE RADIO\"}",
+                   rFreq, rProto, rRssi, rDesc);
+          Serial.println(rJson);
+          WhereDaFlockBLETelemetry::broadcast(rJson);
+#ifdef USE_M5STICKC_PLUS_DISPLAY
+          m5stickDisplayShowAlertRich("RF BRIDGE", rDesc, rMac, rProto,
+                                     "POLICE_FREQ", "RADIO_TX", (int8_t)rRssi, -1.0f, 95,
+                                     0, 6000, CAT_POLICE_RADIO);
+#endif
+        } else if (cmd.indexOf("get_config") >= 0) {
           WhereDaFlockSession::emitConfigJSON();
         } else if (cmd.indexOf("set_beep_mask") >= 0) {
           int mask = cmd.substring(cmd.indexOf("mask\":") + 6).toInt();
@@ -607,17 +737,16 @@ void setup() {
   wdf_hal::ledSet(false);
   wdf_hal::buzzerInit();
 
-  // Pre-compile OUIs into byte table (kept in IRAM). Note: 82:6b:f2 is kept;
-  // do not add a locally-administered skip - it would drop a real camera.
-  for (size_t i = 0; i < OUI_COUNT; i++) {
-    oui_bytes[i][0] = (uint8_t)strtol(TARGET_OUIS[i],    NULL, 16);
-    oui_bytes[i][1] = (uint8_t)strtol(TARGET_OUIS[i] + 3, NULL, 16);
-    oui_bytes[i][2] = (uint8_t)strtol(TARGET_OUIS[i] + 6, NULL, 16);
+  // Pre-compile OUIs into byte table (kept in IRAM).
+  for (size_t i = 0; i < ALL_OUI_COUNT; i++) {
+    all_oui_bytes[i][0] = (uint8_t)strtol(ALL_TARGET_OUIS[i].oui,     NULL, 16);
+    all_oui_bytes[i][1] = (uint8_t)strtol(ALL_TARGET_OUIS[i].oui + 3, NULL, 16);
+    all_oui_bytes[i][2] = (uint8_t)strtol(ALL_TARGET_OUIS[i].oui + 6, NULL, 16);
   }
 
-  Serial.println("WhereDaFlock v2.1.0 - passive 2.4GHz Flock Cam detector");
+  Serial.println("WhereDaFlock v2.2.0 - passive Multi-Threat Surveillance Detector");
   Serial.println("RECEIVE-ONLY promiscuous mode. No transmissions.");
-  Serial.printf("Targeting %u Flock OUIs (%s)\n", (unsigned)OUI_COUNT, __DATE__);
+  Serial.printf("Targeting %u Multi-Threat Surveillance Signatures (%s)\n", (unsigned)ALL_OUI_COUNT, __DATE__);
   WhereDaFlockBLE::bleSetup();   // no-op unless WDF_ENABLE_BLE; prints a note if on
 
   startupBeep();

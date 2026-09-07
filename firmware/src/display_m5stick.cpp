@@ -205,6 +205,7 @@ struct AlertState {
   char vendor[32];
   char method[24];
   char verdict[24];
+  uint8_t category;
   int8_t rssi;
   float distM;
   uint8_t confidence;
@@ -225,10 +226,24 @@ static void drawAlertHUDFull() {
   tft.fillScreen(TFT_BLACK);
 
   // 1. Header Banner (Y=0..19)
-  tft.fillRect(0, 0, TFT_WIDTH_PX, 19, HW_RED);
+  uint16_t headerColor = HW_RED;
+  const char* title = "[!] TARGET DETECTED";
+  switch ((TargetCategory)alertData.category) {
+    case CAT_FLOCK_ALPR:       headerColor = HW_RED;      title = "[!] FLOCK ALPR DETECTED"; break;
+    case CAT_POLICE_VEHICLE:   headerColor = 0x03FF;      title = "[!] POLICE CRUISER / MDT"; break;
+    case CAT_POLICE_BODYCAM:   headerColor = TFT_MAGENTA; title = "[!] POLICE BODYCAM / FLEET"; break;
+    case CAT_OTHER_ALPR:       headerColor = TFT_ORANGE;  title = "[!] ALPR CAM DETECTED"; break;
+    case CAT_SURVEILLANCE_CAM: headerColor = 0x05E0;      title = "[!] CCTV SURVEILLANCE"; break;
+    case CAT_DRONE_UAV:        headerColor = 0xFFE0;      title = "[!] FAA DRONE REMOTE ID"; break;
+    case CAT_POLICE_RADIO:     headerColor = 0x001F;      title = "[!] POLICE RADIO SIGNAL"; break;
+    default:                   headerColor = HW_RED;      title = "[!] SURVEILLANCE THREAT"; break;
+  }
+
+  tft.fillRect(0, 0, TFT_WIDTH_PX, 19, headerColor);
   tft.setTextDatum(ML_DATUM);
-  tft.setTextColor(TFT_WHITE, HW_RED);
-  tft.drawString("[!] TARGET: FLOCK DETECTED", 6, 9, 2);
+  uint16_t txtColor = (alertData.category == CAT_DRONE_UAV) ? TFT_BLACK : TFT_WHITE;
+  tft.setTextColor(txtColor, headerColor);
+  tft.drawString(title, 6, 9, 2);
 
   tft.setTextDatum(MR_DATUM);
   String badge = String("[") + alertData.protocol + "] " + String(alertData.confidence) + "%";
@@ -407,7 +422,7 @@ static void drawAlertHUDDynamic(unsigned long now) {
 void m5stickDisplayShowAlertRich(const char* protocol, const char* name, const char* mac,
                                  const char* vendor, const char* method, const char* verdict,
                                  int8_t rssi, float distM, uint8_t confidence,
-                                 uint8_t ch, unsigned long alertMs) {
+                                 uint8_t ch, unsigned long alertMs, uint8_t category) {
   idleCh = ch;
   inAlert = true;
   if (alertMs == 0) alertMs = 5000;
@@ -419,6 +434,18 @@ void m5stickDisplayShowAlertRich(const char* protocol, const char* name, const c
   strncpy(alertData.vendor, vendor ? vendor : "Flock Safety", sizeof(alertData.vendor) - 1);
   strncpy(alertData.method, method ? method : "UNKNOWN", sizeof(alertData.method) - 1);
   strncpy(alertData.verdict, verdict ? verdict : "FLOCK_LIKELY", sizeof(alertData.verdict) - 1);
+
+  if (category == 0) {
+    if (strstr(alertData.verdict, "POLICE_MDT") || strstr(alertData.vendor, "Sierra") || strstr(alertData.vendor, "Cradlepoint")) category = CAT_POLICE_VEHICLE;
+    else if (strstr(alertData.verdict, "BODYCAM") || strstr(alertData.vendor, "Axon") || strstr(alertData.name, "AXON")) category = CAT_POLICE_BODYCAM;
+    else if (strstr(alertData.verdict, "DRONE") || strstr(alertData.vendor, "Drone") || strstr(alertData.name, "RID-")) category = CAT_DRONE_UAV;
+    else if (strstr(alertData.verdict, "ALPR") || strstr(alertData.vendor, "Vigilant") || strstr(alertData.vendor, "Genetec")) category = CAT_OTHER_ALPR;
+    else if (strstr(alertData.verdict, "CCTV") || strstr(alertData.vendor, "Axis") || strstr(alertData.vendor, "Hikvision") || strstr(alertData.vendor, "Dahua")) category = CAT_SURVEILLANCE_CAM;
+    else if (strstr(alertData.verdict, "RADIO") || strstr(alertData.protocol, "P25") || strstr(alertData.protocol, "DMR")) category = CAT_POLICE_RADIO;
+    else category = CAT_FLOCK_ALPR;
+  }
+  alertData.category = category;
+
   alertData.rssi = rssi;
   alertData.distM = distM;
   alertData.confidence = confidence;
@@ -492,8 +519,7 @@ static void drawBirdTUI(unsigned long now, uint8_t ch, int detCount) {
   static int currentAnimFrame = 0;
   if (now - lastAnimFrameAt >= 40) {
     lastAnimFrameAt = now;
-    tft.setSwapBytes(true);
-    tft.pushImage(0, 0, WhereDaFlockAnimation::DISPLAY_WIDTH, WhereDaFlockAnimation::DISPLAY_HEIGHT, (const uint16_t*)WhereDaFlockAnimation::anim_frames[currentAnimFrame]);
+    WhereDaFlockAnimation::drawFrame(tft, currentAnimFrame, 0, 0);
     currentAnimFrame = (currentAnimFrame + 1) % WhereDaFlockAnimation::ANIM_FRAMES;
 
     float vbat = m5stickGetBatteryVoltage();
@@ -589,30 +615,44 @@ static void drawRadarHUD(unsigned long now, uint8_t ch, int detCount) {
   tft.drawString(String(radarAngleDeg, 0) + (char)0xF8, rx, 110, 1);
 }
 
-// --- Mode 2: Spectrum / Channel Monitor ---
+// --- Mode 2: Spectrum / Frequency Monitor ---
 static void drawSpectrumHUD(unsigned long now, uint8_t ch, int detCount) {
   if (now - lastFrameTick < 100) return;
   lastFrameTick = now;
 
   tft.fillScreen(TFT_BLACK);
 
-  // Title
-  tft.setTextColor(HW_RED, TFT_BLACK);
-  tft.setTextDatum(TC_DATUM);
-  tft.drawString("SPECTRUM MONITOR", TFT_WIDTH_PX / 2, 3, 2);
+  // Title Bar (Y=0..16)
+  tft.fillRect(0, 0, TFT_WIDTH_PX, 16, HW_DKRED);
+  tft.setTextColor(TFT_WHITE, HW_DKRED);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("RF SPECTRUM & FREQUENCIES", TFT_WIDTH_PX / 2, 8, 2);
 
-  // Bar graph for channels 1, 6, 11
+  // Active channel & tuning info
+  tft.setTextColor(HW_YELLOW, TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  uint16_t activeFreq = (ch == 1) ? 2412 : ((ch == 6) ? 2437 : ((ch == 11) ? 2462 : (2407 + ch * 5)));
+  char scanBuf[32];
+  snprintf(scanBuf, sizeof(scanBuf), "SCAN: CH%u [%u MHz]", ch, activeFreq);
+  tft.drawString(scanBuf, 5, 20, 1);
+
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(HW_CYAN, TFT_BLACK);
+  tft.drawString("SUB-GHZ RX: ACTIVE", TFT_WIDTH_PX - 5, 20, 1);
+
+  // Bar graph for primary ALPR / surveillance frequencies (2412, 2437, 2462 MHz)
   uint16_t maxHits = max(max(chHits1, chHits6), chHits11);
   if (maxHits == 0) maxHits = 1;
 
-  int barW = 50;
-  int barMaxH = 75;
-  int baseY = 120;
-  int gap = 15;
+  int barW = 54;
+  int barMaxH = 58;
+  int baseY = 105;
+  int gap = 18;
   int startX = (TFT_WIDTH_PX - (3 * barW + 2 * gap)) / 2;
 
   uint16_t hits[3] = {chHits1, chHits6, chHits11};
   const char* labels[3] = {"CH 1", "CH 6", "CH 11"};
+  const char* freqs[3]  = {"2412 MHz", "2437 MHz", "2462 MHz"};
   uint8_t chs[3] = {1, 6, 11};
 
   for (int i = 0; i < 3; i++) {
@@ -621,27 +661,29 @@ static void drawSpectrumHUD(unsigned long now, uint8_t ch, int detCount) {
     if (h < 2 && hits[i] > 0) h = 2;
 
     // Bar fill
-    uint16_t color = (chs[i] == ch) ? HW_RED : TFT_DARKGREY;
+    uint16_t color = (chs[i] == ch) ? HW_RED : 0x03FF;
     tft.fillRect(x, baseY - h, barW, h, color);
     // Bar outline
     tft.drawRect(x, baseY - barMaxH, barW, barMaxH, TFT_DARKGREY);
 
-    // Label
+    // Channel label & exact frequency
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(TC_DATUM);
-    tft.drawString(labels[i], x + barW / 2, baseY + 3, 1);
+    tft.drawString(labels[i], x + barW / 2, baseY + 2, 1);
+    tft.setTextColor(HW_DARKGREY, TFT_BLACK);
+    tft.drawString(freqs[i], x + barW / 2, baseY + 12, 1);
 
     // Count above bar
     tft.setTextDatum(BC_DATUM);
+    tft.setTextColor(HW_YELLOW, TFT_BLACK);
     tft.drawString(String(hits[i]), x + barW / 2, baseY - h - 2, 1);
   }
 
-  // Active channel indicator
-  tft.setTextColor(HW_RED, TFT_BLACK);
-  tft.setTextDatum(TL_DATUM);
-  tft.drawString("SCAN: CH" + String(ch), 5, 22, 1);
-  tft.setTextDatum(TR_DATUM);
-  tft.drawString("TOTAL: " + String(totalDetections), TFT_WIDTH_PX - 5, 22, 1);
+  // Footer status bar: Sub-GHz police radio bridge status
+  tft.fillRect(0, 122, TFT_WIDTH_PX, 13, 0x0010);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(HW_CYAN, 0x0010);
+  tft.drawString("POLICE RADIO: P25 / DMR / TRUNKED BRIDGE OK", 6, 128, 1);
 }
 
 // --- Mode 3: System Info Panel ---
@@ -805,7 +847,7 @@ static void drawCapturesList(unsigned long now) {
       uint16_t nameColor = isSel ? HW_YELLOW : TFT_WHITE;
       tft.setTextColor(nameColor, isSel ? HW_DKRED : TFT_BLACK);
       char titleBuf[48];
-      snprintf(titleBuf, sizeof(titleBuf), "%s#%d [%s] %s", isSel ? "> " : "  ", itemIdx + 1, det.protocol, det.name);
+      snprintf(titleBuf, sizeof(titleBuf), "%s#%d [%s] %s", isSel ? "> " : "  ", itemIdx + 1, categoryToString((TargetCategory)det.category), det.name);
       tft.drawString(titleBuf, 6, itemY + 3, 1);
 
       tft.setTextDatum(TR_DATUM);
@@ -875,11 +917,13 @@ static void drawCaptureDetail(unsigned long now) {
   tft.fillScreen(TFT_BLACK);
 
   // 1. Header Banner (Y=0..19)
-  tft.fillRect(0, 0, TFT_WIDTH_PX, 19, HW_RED);
+  uint16_t headerColor = categoryColor((TargetCategory)det.category);
+  tft.fillRect(0, 0, TFT_WIDTH_PX, 19, headerColor);
   tft.setTextDatum(ML_DATUM);
-  tft.setTextColor(TFT_WHITE, HW_RED);
+  uint16_t txtColor = (det.category == CAT_DRONE_UAV) ? TFT_BLACK : TFT_WHITE;
+  tft.setTextColor(txtColor, headerColor);
   char titleBuf[32];
-  snprintf(titleBuf, sizeof(titleBuf), "[!] CAPTURE #%d: FLOCK", selectedCaptureIdx + 1);
+  snprintf(titleBuf, sizeof(titleBuf), "[!] #%d: %s", selectedCaptureIdx + 1, categoryToString((TargetCategory)det.category));
   tft.drawString(titleBuf, 6, 9, 2);
 
   tft.setTextDatum(MR_DATUM);

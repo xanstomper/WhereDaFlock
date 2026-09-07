@@ -54,7 +54,6 @@ struct Slot {
 Slot slots[MAX_DEVICES];
 int slotCount = 0;
 
-// Thread-safe alert mailbox between BLE callback task and main loop
 struct BleAlertMailbox {
   char protocol[12];
   char name[32];
@@ -62,6 +61,7 @@ struct BleAlertMailbox {
   char vendor[32];
   char method[24];
   char verdict[24];
+  uint8_t category;
   int8_t rssi;
   float distM;
   uint8_t confidence;
@@ -79,6 +79,32 @@ float bleDistance(int rssi) {
   return (0.89976f * powf(ratio, 7.7095f)) + 0.111f;
 }
 
+static inline uint16_t bleGetMfrId(BLEAdvertisedDevice* d) {
+  if (!d->haveManufacturerData()) return 0;
+  std::string data = d->getManufacturerData();
+  if (data.length() < 2) return 0;
+  return (uint8_t)data[0] | ((uint8_t)data[1] << 8);
+}
+
+static inline bool bleHasServiceUuidFragment(BLEAdvertisedDevice* d, const char* targetFrag) {
+  String target = toUpper(String(targetFrag));
+  for (int i = 0; i < d->getServiceUUIDCount(); i++) {
+    String up = toUpper(String(d->getServiceUUID(i).toString().c_str()));
+    if (up.indexOf(target) >= 0) return true;
+  }
+  return false;
+}
+
+static inline bool bleMatchesAnyName(const String& name, const char* const* patterns, size_t count) {
+  if (!name.length()) return false;
+  String up = toUpper(name);
+  for (size_t i = 0; i < count; i++) {
+    String pat = toUpper(String(patterns[i]));
+    if (up.indexOf(pat) >= 0) return true;
+  }
+  return false;
+}
+
 bool bleNameMatch(const String& name, String& which) {
   if (!name.length()) return false;
   String up = toUpper(name);
@@ -90,11 +116,7 @@ bool bleNameMatch(const String& name, String& which) {
 }
 
 bool bleHasMfrId(BLEAdvertisedDevice* d) {
-  if (!d->haveManufacturerData()) return false;
-  std::string data = d->getManufacturerData();
-  if (data.length() < 2) return false;
-  uint16_t mfrId = (uint8_t)data[0] | ((uint8_t)data[1] << 8);
-  return (mfrId == FLOCK_MFR_ID);
+  return bleGetMfrId(d) == FLOCK_MFR_ID;
 }
 
 bool bleSvcMatch(BLEAdvertisedDevice* d, String& which) {
@@ -132,17 +154,93 @@ class BleScanCb : public BLEAdvertisedDeviceCallbacks {
     int rssi = d.getRSSI();
     if (rssi < RSSI_FLOOR) return;
 
-    int score = 0; String method = "none";
-    if (bleHasMfrId(&d)) { score += MFR_ID_WEIGHT; method = "mfr_id"; }
-    String which;
-    if (name.length() && bleNameMatch(name, which)) {
+    uint16_t mfrId = bleGetMfrId(&d);
+    uint8_t category = CAT_UNKNOWN;
+    const char* vendor = "Flock / BLE";
+    const char* defaultName = "FS Ext Battery";
+    const char* verdict = "CANDIDATE";
+    int score = 0;
+    String method = "none";
+
+    // 1. Flock Safety check
+    if (mfrId == FLOCK_MFR_ID) {
+      category = CAT_FLOCK_ALPR;
+      vendor = "Flock Safety (0x09C8)";
+      defaultName = "FS Ext Battery";
+      verdict = "FLOCK_LIKELY";
+      score += MFR_ID_WEIGHT;
+      method = "mfr_id";
+    } else if (bleNameMatch(name, method)) {
+      category = CAT_FLOCK_ALPR;
+      vendor = "Flock Safety";
+      defaultName = "Flock Camera";
+      verdict = "FLOCK_LIKELY";
       score += NAME_MATCH_WEIGHT;
-      if (method == "none") method = "name";
+      method = "name";
     }
-    if (bleSvcMatch(&d, which)) {
+
+    // 2. Axon Enterprise Police Bodycam / Signal check
+    if (mfrId == AXON_MFR_ID) {
+      category = CAT_POLICE_BODYCAM;
+      vendor = "Axon Enterprise";
+      defaultName = "Axon Signal Beacon";
+      verdict = "POLICE_BODYCAM";
+      score = max(score, 85);
+      method = "axon_mfr";
+    }
+    for (size_t s = 0; s < AXON_SIGNAL_UUID_COUNT; s++) {
+      if (bleHasServiceUuidFragment(&d, AXON_SIGNAL_UUIDS[s])) {
+        category = CAT_POLICE_BODYCAM;
+        vendor = "Axon Enterprise";
+        defaultName = "Axon Signal Sync";
+        verdict = "POLICE_BODYCAM";
+        score = max(score, 90);
+        method = "axon_signal_uuid";
+        break;
+      }
+    }
+    if (bleMatchesAnyName(name, POLICE_NAME_PATTERNS, POLICE_NAME_PATTERN_COUNT)) {
+      if (category == CAT_UNKNOWN) {
+        category = CAT_POLICE_BODYCAM;
+        vendor = "Axon Enterprise";
+        defaultName = "Axon Police Device";
+        verdict = "POLICE_BODYCAM";
+      }
+      score = max(score, 75);
+      if (method == "none") method = "police_name";
+    }
+
+    // 3. Drone Remote ID check (ASTM F3411)
+    if (bleHasServiceUuidFragment(&d, DRONE_RID_UUID)) {
+      category = CAT_DRONE_UAV;
+      vendor = "Drone Remote ID";
+      defaultName = "FAA Drone RID";
+      verdict = "DRONE_DETECTED";
+      score = max(score, 90);
+      method = "drone_rid_uuid";
+    } else if (bleMatchesAnyName(name, DRONE_NAME_PATTERNS, DRONE_NAME_PATTERN_COUNT)) {
+      if (category == CAT_UNKNOWN) {
+        category = CAT_DRONE_UAV;
+        vendor = "Drone Remote ID";
+        defaultName = "UAV Drone Beacon";
+        verdict = "DRONE_DETECTED";
+      }
+      score = max(score, 70);
+      if (method == "none") method = "drone_name";
+    }
+
+    // Supporting secondary service UUIDs
+    String whichSvc;
+    if (bleSvcMatch(&d, whichSvc)) {
       score += SERVICE_UUID_WEIGHT;
-      if (method == "none") method = "service_uuid";
+      if (method == "none") {
+        method = "service_uuid";
+        category = CAT_FLOCK_ALPR;
+        vendor = "Flock Safety";
+        defaultName = "Flock Peripheral";
+      }
     }
+
     if (score > 0 && rssi >= -50) score += RSSI_PROXIMITY_BONUS;
     if (score == 0) return;
     score = min(100, score);
@@ -154,20 +252,19 @@ class BleScanCb : public BLEAdvertisedDeviceCallbacks {
     s.method = method; s.lastSeenAt = millis();
     bool isLikely = (score >= LIKELY_THRESHOLD);
 
+    const char* finalName = name.length() ? name.c_str() : defaultName;
+
     // Rate-limit serial emission: immediate on isNew, otherwise at most once per second
     static unsigned long lastSerialEmit = 0;
     unsigned long now = millis();
     if (isNew || (now - lastSerialEmit >= 1000)) {
       lastSerialEmit = now;
-      Serial.printf("{\"event\":\"%s\",\"protocol\":\"ble\",\"mac\":\"%s\","
-                    "\"name\":\"%s\",\"rssi\":%d,\"dist_m\":%.2f,\"conf\":%d,"
-                    "\"method\":\"%s\",\"mfr_id\":\"0x%04X\",\"verdict\":\"%s\"}\n",
-                    isNew ? "new" : "update", mac,
-                    name.length() ? name.c_str() : "FS Ext Battery",
-                    rssi, bleDistance(rssi), score, method.c_str(),
-                    (unsigned)FLOCK_MFR_ID,
-                    isLikely ? "FLOCK_LIKELY"
-                    : (score >= POSSIBLE_THRESHOLD ? "FLOCK_POSSIBLE" : "CANDIDATE"));
+      Serial.printf("{\"event\":\"%s\",\"protocol\":\"ble\",\"category\":\"%s\",\"mac\":\"%s\","
+                    "\"name\":\"%s\",\"vendor\":\"%s\",\"rssi\":%d,\"dist_m\":%.2f,\"conf\":%d,"
+                    "\"method\":\"%s\",\"verdict\":\"%s\"}\n",
+                    isNew ? "new" : "update", categoryToString((TargetCategory)category), mac,
+                    finalName, vendor,
+                    rssi, bleDistance(rssi), score, method.c_str(), verdict);
     }
 
     if (isLikely || isNew) s.reported = true;
@@ -179,11 +276,12 @@ class BleScanCb : public BLEAdvertisedDeviceCallbacks {
       // Safely handoff alert telemetry to loop() on the main thread
       if (!alertMailbox.pending) {
         strncpy(alertMailbox.protocol, "BLE 4.2", sizeof(alertMailbox.protocol) - 1);
-        strncpy(alertMailbox.name, name.length() ? name.c_str() : "FS Ext Battery", sizeof(alertMailbox.name) - 1);
+        strncpy(alertMailbox.name, finalName, sizeof(alertMailbox.name) - 1);
         strncpy(alertMailbox.mac, mac, sizeof(alertMailbox.mac) - 1);
-        strncpy(alertMailbox.vendor, "Flock Safety (0x09C8)", sizeof(alertMailbox.vendor) - 1);
+        strncpy(alertMailbox.vendor, vendor, sizeof(alertMailbox.vendor) - 1);
         strncpy(alertMailbox.method, method.c_str(), sizeof(alertMailbox.method) - 1);
-        strncpy(alertMailbox.verdict, "FLOCK_LIKELY", sizeof(alertMailbox.verdict) - 1);
+        strncpy(alertMailbox.verdict, verdict, sizeof(alertMailbox.verdict) - 1);
+        alertMailbox.category = category;
         alertMailbox.rssi = rssi;
         alertMailbox.distM = bleDistance(rssi);
         alertMailbox.confidence = score;
@@ -268,19 +366,23 @@ inline void checkAlerts() {
 
     bool chirpWorthy = false;
     wdfAddBleDetection(alertMailbox.mac, alertMailbox.name, alertMailbox.vendor,
-                       alertMailbox.method, alertMailbox.verdict,
+                       alertMailbox.method, alertMailbox.verdict, alertMailbox.category,
                        rssi, dist, alertMailbox.confidence, &chirpWorthy);
 
     if (isNew) {
-      ::tierChirp(4);
+      if (alertMailbox.category == CAT_POLICE_VEHICLE || alertMailbox.category == CAT_POLICE_BODYCAM) {
+        policeChirp();
+      } else {
+        ::tierChirp(4);
+      }
 #ifdef USE_M5STICKC_PLUS_DISPLAY
       m5stickDisplayShowAlertRich(alertMailbox.protocol, alertMailbox.name,
                                  alertMailbox.mac, alertMailbox.vendor,
                                  alertMailbox.method, alertMailbox.verdict,
                                  rssi, dist, alertMailbox.confidence,
-                                 0, 6000);
+                                 0, 6000, alertMailbox.category);
 #else
-      dongleDisplayShowAlert("BLE_FLOCK", alertMailbox.mac, rssi, 0, 6000);
+      dongleDisplayShowAlert("BLE_TARGET", alertMailbox.mac, rssi, 0, 6000);
 #endif
     } else {
 #ifdef USE_M5STICKC_PLUS_DISPLAY

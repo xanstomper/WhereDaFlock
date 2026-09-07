@@ -36,6 +36,7 @@ typedef struct {
   char     vendor[32];
   char     method[24];
   char     verdict[24];
+  uint8_t  category;
   uint8_t  tier;
   int8_t   rssi;
   float    distM;
@@ -51,9 +52,17 @@ extern WDFDetection wdfDet[WDF_MAX_DETECTIONS];
 extern int          wdfDetCount;
 extern volatile uint8_t wdfBeepMask;   // bit N = tier N audible
 
+void tierChirp(uint8_t tier);
+void policeChirp();
+
 int wdfAddBleDetection(const char* mac, const char* name, const char* vendor,
-                       const char* method, const char* verdict, int8_t rssi,
-                       float distM, uint8_t conf, bool* outChirpWorthy);
+                       const char* method, const char* verdict, uint8_t category,
+                       int8_t rssi, float distM, uint8_t conf, bool* outChirpWorthy);
+
+int wdfAddGenericDetection(const char* mac, const char* name, const char* proto,
+                           const char* vendor, const char* method, const char* verdict,
+                           uint8_t category, uint8_t tier, int8_t rssi, uint8_t ch,
+                           float distM, uint8_t conf, bool* outChirpWorthy);
 
 namespace WhereDaFlockSession {
 
@@ -98,10 +107,12 @@ inline void saveBeepMask() {
 inline size_t serializeDet(const WDFDetection& d, char* dst, size_t cap) {
   int n = snprintf(
       dst, cap,
-      "{\"mac\":\"%s\",\"method\":\"%s\",\"tier\":%u,\"rssi\":%d,"
-      "\"channel\":%u,\"first\":%lu,\"last\":%lu,\"count\":%u,\"ssid\":\"\"}",
-      d.mac, d.method, (unsigned)d.tier, d.rssi, (unsigned)d.channel,
-      (unsigned long)d.firstSeen, (unsigned long)d.lastSeen, (unsigned)d.count);
+      "{\"mac\":\"%s\",\"name\":\"%s\",\"protocol\":\"%s\",\"vendor\":\"%s\","
+      "\"method\":\"%s\",\"verdict\":\"%s\",\"category\":%u,\"tier\":%u,\"rssi\":%d,"
+      "\"channel\":%u,\"dist_m\":%.2f,\"conf\":%u,\"first\":%lu,\"last\":%lu,\"count\":%u,\"ssid\":\"%s\"}",
+      d.mac, d.name, d.protocol, d.vendor, d.method, d.verdict, (unsigned)d.category,
+      (unsigned)d.tier, d.rssi, (unsigned)d.channel, d.distM, (unsigned)d.confidence,
+      (unsigned long)d.firstSeen, (unsigned long)d.lastSeen, (unsigned)d.count, d.ssid);
   return (n > 0 && (size_t)n < cap) ? (size_t)n : 0;
 }
 
