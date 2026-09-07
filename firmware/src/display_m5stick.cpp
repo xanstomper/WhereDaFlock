@@ -145,9 +145,52 @@ void m5stickDisplayInit() {
 
 void m5stickDisplayShowBoot() {
   tft.fillScreen(TFT_BLACK);
-  tft.setSwapBytes(true);
+  tft.setTextColor(HW_RED, TFT_BLACK);
   
-  // Play the bird animation at boot
+  // 1. Tactical cyber sweep
+  for (int y = 0; y < TFT_HEIGHT_PX; y += 6) {
+    tft.drawFastHLine(0, y, TFT_WIDTH_PX, HW_RED);
+    delay(12);
+    tft.fillScreen(TFT_BLACK);
+  }
+
+  // 2. Crosshair lock-on animation
+  for (int r = 100; r > 10; r -= 15) {
+    tft.fillScreen(TFT_BLACK);
+    tft.drawCircle(TFT_WIDTH_PX / 2, TFT_HEIGHT_PX / 2, r, HW_RED);
+    tft.drawFastHLine(0, TFT_HEIGHT_PX / 2, TFT_WIDTH_PX, TFT_DARKGREY);
+    tft.drawFastVLine(TFT_WIDTH_PX / 2, 0, TFT_HEIGHT_PX, TFT_DARKGREY);
+    delay(40);
+  }
+  
+  // 3. Console boot text
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(HW_RED, TFT_BLACK);
+  tft.drawString("W.D.F. TACTICAL OS v2.2", 10, 10, 2);
+  delay(180);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("> BOOT_SEQ: OK", 10, 32, 2);
+  delay(180);
+  tft.drawString("> RADIO: 2.4G + BLE + RF", 10, 54, 2);
+  delay(180);
+  tft.drawString("> MULTI-THREAT SIGNATURES", 10, 76, 2);
+  delay(180);
+  tft.drawString("> TARGETING: ACTIVE", 10, 98, 2);
+  delay(350);
+
+  // 4. Flash red to finish boot
+  tft.fillScreen(HW_RED);
+  delay(50);
+  tft.fillScreen(TFT_BLACK);
+  
+  tft.setTextColor(HW_RED, TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("SYSTEM READY", TFT_WIDTH_PX / 2, TFT_HEIGHT_PX / 2, 4);
+  delay(650);
+
+  // 5. Bird Animation Intro Sequence
+  tft.setSwapBytes(true);
   for (int loop = 0; loop < 2; loop++) {
     for (int f = 0; f < WhereDaFlockAnimation::ANIM_FRAMES; f++) {
       tft.pushImage(0, 0, WhereDaFlockAnimation::DISPLAY_WIDTH, WhereDaFlockAnimation::DISPLAY_HEIGHT,
@@ -155,13 +198,7 @@ void m5stickDisplayShowBoot() {
       delay(35);
     }
   }
-
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_WHITE, TFT_TRANSPARENT);
-  tft.drawString("WHEREDAFLOCK v2.2", TFT_WIDTH_PX / 2, 20, 2);
-  tft.setTextColor(HW_RED, TFT_TRANSPARENT);
-  tft.drawString("MULTI-THREAT SCANNER", TFT_WIDTH_PX / 2, 115, 2);
-  delay(700);
+  tft.fillScreen(TFT_BLACK);
 }
 
 void m5stickDisplayShowIdle(uint8_t ch, int detCount) {
