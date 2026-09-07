@@ -145,45 +145,23 @@ void m5stickDisplayInit() {
 
 void m5stickDisplayShowBoot() {
   tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(HW_RED, TFT_BLACK);
+  tft.setSwapBytes(true);
   
-  // Tactical cyber sweep
-  for (int y = 0; y < TFT_HEIGHT_PX; y += 5) {
-    tft.drawFastHLine(0, y, TFT_WIDTH_PX, HW_RED);
-    delay(10);
-    tft.fillScreen(TFT_BLACK);
+  // Play the bird animation at boot
+  for (int loop = 0; loop < 2; loop++) {
+    for (int f = 0; f < WhereDaFlockAnimation::ANIM_FRAMES; f++) {
+      tft.pushImage(0, 0, WhereDaFlockAnimation::DISPLAY_WIDTH, WhereDaFlockAnimation::DISPLAY_HEIGHT,
+                    (const uint16_t*)WhereDaFlockAnimation::anim_frames[f]);
+      delay(35);
+    }
   }
 
-  // Crosshair lock-on animation
-  for (int r = 100; r > 10; r -= 15) {
-    tft.fillScreen(TFT_BLACK);
-    tft.drawCircle(TFT_WIDTH_PX/2, TFT_HEIGHT_PX/2, r, HW_RED);
-    tft.drawFastHLine(0, TFT_HEIGHT_PX/2, TFT_WIDTH_PX, TFT_DARKGREY);
-    tft.drawFastVLine(TFT_WIDTH_PX/2, 0, TFT_HEIGHT_PX, TFT_DARKGREY);
-    delay(40);
-  }
-  
-  // Console boot text
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextDatum(TL_DATUM);
-  tft.drawString("W.D.F. TACTICAL OS v2.0", 10, 10, 2);
-  delay(200);
-  tft.drawString("> BOOT_SEQ: INIT", 10, 35, 2);
-  delay(200);
-  tft.drawString("> RADIO: PROMISCUOUS", 10, 60, 2);
-  delay(200);
-  tft.drawString("> TARGETING: FLOCK", 10, 85, 2);
-  delay(400);
-
-  // Flash red to finish boot
-  tft.fillScreen(HW_RED);
-  delay(50);
-  tft.fillScreen(TFT_BLACK);
-  
-  tft.setTextColor(HW_RED, TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("SYSTEM READY", TFT_WIDTH_PX/2, TFT_HEIGHT_PX/2, 4);
-  delay(1000);
+  tft.setTextColor(TFT_WHITE, TFT_TRANSPARENT);
+  tft.drawString("WHEREDAFLOCK v2.2", TFT_WIDTH_PX / 2, 20, 2);
+  tft.setTextColor(HW_RED, TFT_TRANSPARENT);
+  tft.drawString("MULTI-THREAT SCANNER", TFT_WIDTH_PX / 2, 115, 2);
+  delay(700);
 }
 
 void m5stickDisplayShowIdle(uint8_t ch, int detCount) {
@@ -519,7 +497,9 @@ static void drawBirdTUI(unsigned long now, uint8_t ch, int detCount) {
   static int currentAnimFrame = 0;
   if (now - lastAnimFrameAt >= 40) {
     lastAnimFrameAt = now;
-    WhereDaFlockAnimation::drawFrame(tft, currentAnimFrame, 0, 0);
+    tft.setSwapBytes(true);
+    tft.pushImage(0, 0, WhereDaFlockAnimation::DISPLAY_WIDTH, WhereDaFlockAnimation::DISPLAY_HEIGHT,
+                  (const uint16_t*)WhereDaFlockAnimation::anim_frames[currentAnimFrame]);
     currentAnimFrame = (currentAnimFrame + 1) % WhereDaFlockAnimation::ANIM_FRAMES;
 
     float vbat = m5stickGetBatteryVoltage();
