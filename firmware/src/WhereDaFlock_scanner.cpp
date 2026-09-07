@@ -1,3 +1,4 @@
+#include <Arduino.h>
 /*
  * WhereDaFlock - Flock Cam 2.4GHz Passive Detector (ESP32)
  * -------------------------------------------------------------
@@ -27,10 +28,12 @@
 
 #include <WiFi.h>
 #include <esp_wifi.h>
-#include "src/signatures.h"
-#include "src/session.h"
-#include "src/display_dongle.h"
-#include "src/ble_telemetry.h"
+#include "signatures.h"
+#include "session.h"
+#include "display_dongle.h"
+#include "display_m5stick.h"
+#include "ble_telemetry.h"
+#include "ble_scan_module.h"   // additive, time-sliced BLE scanning (opt-in)
 
 using namespace WhereDaFlock;
 
@@ -192,7 +195,7 @@ static void chirp2(uint16_t lo, uint16_t hi) {
   delay(TIER_GAP_MS);
   tone(BUZZER_PIN, hi); delay(TIER_NOTE_MS); noTone(BUZZER_PIN);
 }
-static void tierChirp(uint8_t tier) {
+void tierChirp(uint8_t tier) {
   if (!tierAudible(tier)) return;
   switch (tier) {
     case TIER_IE_SIG: chirp2(T4_LO_HZ, T4_HI_HZ); break;
@@ -414,12 +417,12 @@ static void emitDetectionJSON(const char* mac, const char* method, uint8_t tier,
 static void drainAlertQueue() {
   size_t n = 0;
   while (alertHead != alertTail && n < ALERT_QUEUE_SIZE) {
-    const AlertEntry* e = &alertQueue[alertTail];
+    const volatile AlertEntry* e = &alertQueue[alertTail];
     alertTail = (alertTail + 1) % ALERT_QUEUE_SIZE;
     n++;
 
     char mac[18];
-    macToStr(e->mac, mac, sizeof(mac));
+    macToStr((const uint8_t*)e->mac, mac, sizeof(mac));
     const char* method = tierToMethodLetter(e->tier);
 
     bool chirpWorthy = false;
@@ -434,7 +437,11 @@ static void drainAlertQueue() {
       emitDetectionJSON(mac, method, e->tier, e->rssi, e->channel);
       tierChirp(e->tier);
       ledSet(true); ledOffAt = millis() + LED_FLASH_MS;
+#ifdef USE_M5STICKC_PLUS_DISPLAY
+      m5stickDisplayShowAlert(method, mac, e->rssi, e->channel, ALERT_COOLDOWN_MS);
+#else
       dongleDisplayShowAlert(method, mac, e->rssi, e->channel, ALERT_COOLDOWN_MS);
+#endif
     }
   }
 }
@@ -445,7 +452,11 @@ static void updateChannelMode() {
     currentChannel = SINGLE_CHANNEL;
     esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   }
+  #ifdef USE_M5STICKC_PLUS_DISPLAY
+  m5stickDisplayShowIdle(currentChannel, wdfDetCount);
+#else
   dongleDisplayShowIdle(currentChannel, wdfDetCount);
+#endif
   return;
 #else
   if (millis() - lastHop < CHANNEL_DWELL_MS) return;
@@ -453,7 +464,11 @@ static void updateChannelMode() {
   currentChannel = activeChannels[chanIdx];
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   lastHop = millis();
+  #ifdef USE_M5STICKC_PLUS_DISPLAY
+  m5stickDisplayShowIdle(currentChannel, wdfDetCount);
+#else
   dongleDisplayShowIdle(currentChannel, wdfDetCount);
+#endif
 #endif
 }
 
@@ -539,9 +554,15 @@ void setup() {
   Serial.println("WhereDaFlock v2.1.0 - passive 2.4GHz Flock Cam detector");
   Serial.println("RECEIVE-ONLY promiscuous mode. No transmissions.");
   Serial.printf("Targeting %u Flock OUIs (%s)\n", (unsigned)OUI_COUNT, __DATE__);
+  WhereDaFlockBLE::bleSetup();   // no-op unless WDF_ENABLE_BLE; prints a note if on
 
   startupBeep();
+  #ifdef USE_M5STICKC_PLUS_DISPLAY
+  m5stickDisplayInit();
+  m5stickDisplayShowBoot();
+#else
   dongleDisplayInit();
+#endif
   WhereDaFlockBLETelemetry::init();
 
   // Session + control plane (SPIFFS persistence, NVS beep mask, boot recovery).
@@ -577,10 +598,25 @@ void setup() {
 }
 
 void loop() {
+  if (WhereDaFlockBLE::blePoll()) {   // BLE scan window owns the radio
+    #ifdef USE_M5STICKC_PLUS_DISPLAY
+    m5stickDisplayTick(millis(), currentChannel, wdfDetCount);
+    #else
+    dongleDisplayTick(millis(), currentChannel, wdfDetCount);
+    #endif
+    handleHostCommands();
+    ledTick();
+    delay(1);
+    return;
+  }
   drainAlertQueue();
   updateChannelMode();
   heartbeatTick();
+  #ifdef USE_M5STICKC_PLUS_DISPLAY
+  m5stickDisplayTick(millis(), currentChannel, wdfDetCount);
+#else
   dongleDisplayTick(millis(), currentChannel, wdfDetCount);
+#endif
   handleHostCommands();          // dashboard control plane (USB CDC)
   ledTick();
   delay(1);

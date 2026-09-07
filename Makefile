@@ -15,7 +15,7 @@
 PY=python3
 GO=go
 
-.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble emulator analyze flash verify ci help
+.PHONY: test backend backend-test docker-up docker-down dashboard seed coreml firmware wifi ble emulator signal signal-ble signal-stop analyze flash verify ci help
 
 test:
 	$(PY) firmware/tests/test_detection.py
@@ -55,8 +55,19 @@ ble:
 firmware: wifi ble
 
 emulator:
-	cd tools/emulator && pio run 2>/dev/null || \
-		echo "Build emulator with arduino-cli: compile --fqbn esp32:esp32:esp32 FlockCam_emulator.ino"
+	cd tools/emulator && pio run -e esp32dev || \
+		echo "Build with: cd tools/emulator && pio run -e esp32dev"
+
+# Emit a real Flock BLE signal from THIS PC in software (Bluetooth only).
+# Your WiFi is NOT touched. Run the host BLE scanner to verify detection:
+#   python3 firmware/ble_scanner.py --scan 60
+signal: signal-ble
+
+signal-ble:
+	$(PY) tools/emitter/ble_flock_beacon.py --secs 60
+
+signal-stop:
+	$(PY) tools/emitter/ble_flock_beacon.py --stop
 
 analyze:
 	$(PY) firmware/packet_analyzer.py --help
