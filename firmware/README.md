@@ -143,10 +143,12 @@ firmware/
 ├── host_scanner.py            # WiFi host companion (Scapy)
 ├── ble_scanner.py             # BLE host companion (Bleak)
 ├── packet_analyzer.py         # passive frame decoder (educational)
+├── signal_math.py             # RSSI→distance, multilateration, MAC-bit analysis
 ├── tests/
 │   ├── test_detection.py      # WiFi OUI/tier tests
 │   ├── test_ble_detection.py  # BLE mfr-ID/name/UUID tests
-│   └── test_packet_analyzer.py# 802.11 + BLE frame decoder tests
+│   ├── test_packet_analyzer.py# 802.11 + BLE frame decoder tests
+│   └── test_signal_math.py    # distance / multilateration / MAC-bit tests
 ├── platformio.ini             # WiFi env + BLE env targets
 ├── partitions.csv
 └── LICENSE                    # MIT
@@ -218,6 +220,32 @@ Regression tests (all passive, no hardware):
 ```bash
 python3 tests/test_packet_analyzer.py
 ```
+
+## Signal math (`signal_math.py`)
+
+Educational analysis of received signals without transmitting anything:
+
+| Function | What it does |
+|----------|--------------|
+| `estimate_distance(rssi, tx_power, n)` | RSSI → meters using the log-distance path-loss model |
+| `rssi_to_distance_rough(rssi)` | quick "very close / close / medium / far" label |
+| `multilaterate(anchors)` / `multilaterate_no_numpy(anchors)` | best-fit position from `(x, y, distance)` measurements |
+| `is_locally_administered(mac)` | bit 1 of the first octet → randomized MAC |
+| `is_multicast(mac)` | bit 0 of the first octet |
+| `mac_randomization_label(mac)` | human readout (unicast/multicast, OUI vs random) |
+
+`packet_analyzer.py` uses these: it tags each transmitter's add2 with its
+randomized/universal label, and estimates distance from RSSI when a pcap
+carries signal strength. Example:
+
+```bash
+python3 -c "import sys; sys.path.insert(0,'firmware'); import signal_math as s; print(s.estimate_distance(-62), 'm')"
+```
+
+Multilateration requires positions you supply (your own receiver coordinates);
+it is pure math for studying how signal strength localizes a transmitter.
+
+Tests: `python3 tests/test_signal_math.py`
 
 ## Standalone persistence & device control (WiFi firmware)
 

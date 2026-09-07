@@ -21,6 +21,7 @@ REQUIRES: pip install scapy
 """
 
 import argparse
+import json
 import struct
 import sys
 
@@ -86,7 +87,7 @@ IE_TABLE = {
 }
 
 
-def analyze_wifi(payload):
+def analyze_wifi(payload, show_mac_bits=True):
     """Full readable breakdown of an 802.11 frame."""
     parsed = parse_80211_header(payload)
     if not parsed:
@@ -94,22 +95,70 @@ def analyze_wifi(payload):
     fc, ftype, fsub, a1, a2, a3 = parsed
     tname = FRAME_TYPES.get(ftype, f"type{ftype}")
     sname = MGMT_SUBTYPES.get(fsub, f"subtype{fsub}") if ftype == 0 else f"sub{fsub}"
+    protected = bool(fc & 0x4000)      # Protected Frame bit
+    retry = bool(fc & 0x0800)          # Retry bit
+    more_data = bool(fc & 0x2000)
 
-    lines = [f"  Frame:  {tname} / {sname}  (type={ftype} subtype={fsub})",
-             f"           add1(DA/BSSID): {a1}",
-             f"           add2(SA/TA)   : {a2}",
-             f"           add3(BSSID)  : {a3}"]
-    if ftype == 0 and fsub == 4:  # Probe Request
-        body = payload[24:]
+    import signal_math as sm
+    lines = [
+        f"  Frame:  {tname} / {sname}  (type={ftype} subtype={fsub})",
+        f"           +CRYPTO protected  +retry  +more-data",
+        f"           flags: protect={int(protected)} retry={int(retry)} more_data={int(more_data)}",
+        f"           add1(DA/BSSID): {a1}",
+        f"           add2(SA/TA):    {a2}  [{sm.mac_randomization_label(a2)}]",
+        f"           add3(BSSID):    {a3}",
+    ]
+    if ftype == 0:  # Management — advance past any fixed body header.
+        fixed = {1: 8, 3: 6, 5: 12, 8: 12, 11: 6}.get(fsub, 0)  # assoc/resp, probe-resp/beacon, auth
+        body = payload[24 + fixed:]
+
         tags = parse_elements(body, IE_TABLE)
-        wild = tags and tags[0][0] == 0 and tags[0][3] == "(wildcard/empty)"
-        lines.append(f"  Probe Request body:")
+        lines.append(f"  {sname} body:")
         for tag, name, ln, desc in tags:
             marker = "◄ WILDCARD SSID" if (tag == 0 and desc == "(wildcard/empty)") else "  "
+            if name == "SSID" and desc != "(wildcard/empty)":
+                marker = "● SSID"
             lines.append(f"        {marker} IE {name:<24} len={ln:<3} {desc}")
-        if wild and tags:
-            lines.append("  ➜ This is a WILDCARD probe request (any AP may respond).")
+
+        if fsub == 4 and tags and tags[0][0] == 0 and tags[0][3] == "(wildcard/empty)":
+            lines.append("  ➜ WILDCARD probe request (any AP may respond).")
+        if fsub == 8:  # Beacon
+            ssid = next((t[3] for t in tags if t[0] == 0 and t[3] != "(wildcard/empty)"), "?")
+            lines.append(f"  ➜ Beacon for SSID {ssid!r}")
     return "\n".join(lines)
+
+
+def wifi_to_dict(payload, rssi=None):
+    """Structured dict for a WiFi frame (drives JSON/pcap summaries)."""
+    import signal_math as sm
+    parsed = parse_80211_header(payload)
+    d = {"ok": False}
+    if not parsed:
+        return d
+    fc, ftype, fsub, a1, a2, a3 = parsed
+    d = {
+        "protocol": "wifi_2_4ghz",
+        "type": FRAME_TYPES.get(ftype),
+        "subtype": MGMT_SUBTYPES.get(fsub) if ftype == 0 else f"sub{fsub}",
+        "add1": a1, "add2": a2, "add3": a3,
+        "protected": bool(fc & 0x4000),
+        "retry": bool(fc & 0x0800),
+        "transmitter_randomized": sm.is_locally_administered(a2),
+        "ok": True,
+    }
+    if rssi is not None:
+        d["rssi"] = rssi
+        d["dist_m"] = sm.estimate_distance(rssi)
+        d["range_label"] = sm.rssi_to_distance_rough(rssi)
+    if ftype == 0 and fsub in (0, 1, 2, 3, 4, 5, 8, 11, 13):
+        fixed = {1: 8, 3: 6, 5: 12, 8: 12, 11: 6}.get(fsub, 0)
+        body = payload[24 + fixed:]
+        tags = parse_elements(body, IE_TABLE)
+        d["elements"] = [{"id": t[0], "name": t[1], "len": t[2], "detail": t[3]} for t in tags]
+        d["ssid"] = next((t[3] for t in tags if t[0] == 0 and t[3] != "(wildcard/empty)"), None)
+        if fsub == 4:
+            d["wildcard_probe"] = any(t[0] == 0 and t[3] == "(wildcard/empty)" for t in tags)
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -194,30 +243,66 @@ def live_capture(iface, count):
 # ---------------------------------------------------------------------------
 # Offline pcap analysis (works without hardware / root)
 # ---------------------------------------------------------------------------
-def analyze_pcap(path, max_frames=50):
+def analyze_pcap(path, max_frames=50, out_json=None, summary=True):
+    import signal_math as sm
     from scapy.all import rdpcap
-    print(f"Analyzing {path} (up to {max_frames} frames)...\n")
+
+    print(f"Analyzing {path} (up to {max_frames} frames)...")
+    frames = []
     shown = 0
-    for i, pkt in enumerate(rdpcap(path)):
+    for pkt in rdpcap(path):
         try:
             from scapy.layers.dot11 import Dot11
-            if pkt.haslayer(Dot11):
-                print(analyze_wifi(bytes(pkt)))
-                print()
-                shown += 1
-                if shown >= max_frames:
-                    break
+            if not pkt.haslayer(Dot11):
+                continue
+            raw = bytes(pkt)
+            rssi = getattr(pkt, "dBm_AntSignal", None) or getattr(pkt, "signal", None)
+            d = wifi_to_dict(raw, rssi=int(rssi) if rssi is not None else None)
+            if not d.get("ok"):
+                continue
+            print(analyze_wifi(raw))
+            print()
+            frames.append(d)
+            shown += 1
+            if shown >= max_frames:
+                break
         except Exception:
             continue
+
     if shown == 0:
         print("No 802.11 frames found in this capture.")
+        return
+
+    if summary:
+        from collections import Counter
+        subtypes = Counter((f["type"], f["subtype"]) for f in frames)
+        rand = sum(1 for f in frames if f.get("transmitter_randomized"))
+        print("=" * 60)
+        print("PCAP SUMMARY")
+        print(f"  frames decoded   : {len(frames)}")
+        print(f"  randomized addrs : {rand}/{len(frames)} transmitter MACs"
+              " (locally-administered / random-bit set)")
+        print("  frame types:")
+        for (typ, sub), n in subtypes.most_common():
+            print(f"    {typ:<11} / {sub:<22} n={n}")
+        dists = [f["dist_m"] for f in frames if "dist_m" in f]
+        if dists:
+            print(f"  est. distance    : min={min(dists)}m  max={max(dists)}m  (RSSI model)")
+        print("=" * 60)
+
+    if out_json:
+        with open(out_json, "w") as f:
+            json.dump(frames, f, indent=2)
+        print(f"Wrote structured JSON to {out_json} ({len(frames)} frames)")
 
 
 def main():
     ap = argparse.ArgumentParser(description="WhereDaFlock passive packet analyzer")
     ap.add_argument("--pcap", metavar="FILE", help="analyze an offline .pcap")
     ap.add_argument("--live", metavar="IFACE", help="live capture on a monitor-mode iface")
-    ap.add_argument("--count", type=int, default=5)
+    ap.add_argument("--count", type=int, default=20)
+    ap.add_argument("--json", metavar="FILE", help="also write structured JSON")
+    ap.add_argument("--no-summary", action="store_true", help="skip the pcap summary")
     args = ap.parse_args()
 
     try:
@@ -226,7 +311,8 @@ def main():
         sys.exit("Install scapy first: pip install scapy")
 
     if args.pcap:
-        analyze_pcap(args.pcap, args.count)
+        analyze_pcap(args.pcap, args.count, out_json=args.json,
+                     summary=not args.no_summary)
     elif args.live:
         live_capture(args.live, args.count)
     else:

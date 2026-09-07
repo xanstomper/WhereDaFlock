@@ -21,6 +21,7 @@ test:
 	$(PY) firmware/tests/test_detection.py
 	$(PY) firmware/tests/test_ble_detection.py
 	$(PY) firmware/tests/test_packet_analyzer.py
+	$(PY) firmware/tests/test_signal_math.py
 
 backend:
 	cd Backend && $(GO) run ./cmd/server

@@ -64,6 +64,40 @@ print("\n== boundary cases ==")
 ok &= check("short frame handled", pa.analyze_wifi(b"\x00" * 10) is not None, True)
 ok &= check("empty BLE handled", pa.parse_ble_ad(b"") == "", True)
 
+print("\n== beacon frame + RSSI + MAC bits ==")
+
+
+def build_beacon(ssid=b"Test-Ap", tx_hex="70C94E000001"):
+    fc = (0 << 2) | (8 << 4)  # management, beacon
+    p = struct.pack("<H", fc) + b"\x00\x00"
+    p += bytes.fromhex("FF" * 6)            # add1 broadcast DA
+    p += bytes.fromhex(tx_hex)              # add2 SA (transmitter)
+    p += bytes.fromhex(tx_hex)              # add3 BSSID
+    p += b"\x00\x00"                        # seq control
+    p += b"\x00" * 8 + b"\x64\x00" + b"\x00\x01"   # timestamp(8) + interval(2) + capability(2) = 12
+    p += bytes([0, len(ssid)]) + ssid       # SSID IE
+    p += b"\x01\x08\x82\x84\x8B\x96\x0C\x12\x18\x24"  # rates
+    return p
+
+
+beacon = build_beacon()
+w = pa.analyze_wifi(beacon)
+ok &= check("beacon identified", "Beacon" in w, True)
+ok &= check("beacon SSID read", "'Test-Ap'" in w, True)
+
+d = pa.wifi_to_dict(beacon, rssi=-65)
+ok &= check("dict ok", d.get("ok"), True)
+ok &= check("dict type", d.get("type") == "Management", True)
+ok &= check("dict ssid", d.get("ssid") == "Test-Ap", True)
+ok &= check("distance in dict", d.get("dist_m") is not None, True)
+ok &= check("tx randomized flag", d.get("transmitter_randomized") is False, True)  # 70:C9:4E universal
+
+print("\n== wifi_to_dict on randomized transmitter ==")
+probe_rand = build_probe_request("82AB02F10000")
+dr = pa.wifi_to_dict(probe_rand, rssi=-50)
+ok &= check("randomized flag true", dr.get("transmitter_randomized"), True)
+ok &= check("wildcard_probe flag", dr.get("wildcard_probe"), True)
+
 print()
 print("ALL PASS" if ok else "SOME FAILURES")
 sys.exit(0 if ok else 1)
